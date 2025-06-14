@@ -1,6 +1,7 @@
 # Ambiente virtual
-!.gitignore
 .filesvenv/
+.venv/
+venv/
 
 # Python
 __pycache__/
@@ -17,21 +18,21 @@ __pycache__/
 *.db
 *.sqlite3
 
-# Caches e arquivos temporários
+# Cache e arquivos temporários
 *.bak
 *.swp
 *.tmp
 *.DS_Store
 Thumbs.db
 
-# VSCode / IDEs
+# VSCode / PyCharm / IDEs
 .vscode/
 .idea/
 
-# Checkpoints/modelos pesados
+# Checkpoints e modelos pesados
 *.pt
 *.h5
 *.ckpt
 
-# Arquivos de sistema
+# Variáveis de ambiente e configs sensíveis
 .env
