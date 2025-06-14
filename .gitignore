@@ -1,0 +1,37 @@
+# Ambiente virtual
+!.gitignore
+.filesvenv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.log
+
+# Streamlit
+.streamlit/
+
+# Dados gerados
+*.npy
+*.pkl
+*.db
+*.sqlite3
+
+# Caches e arquivos temporários
+*.bak
+*.swp
+*.tmp
+*.DS_Store
+Thumbs.db
+
+# VSCode / IDEs
+.vscode/
+.idea/
+
+# Checkpoints/modelos pesados
+*.pt
+*.h5
+*.ckpt
+
+# Arquivos de sistema
+.env

@@ -1,0 +1,16 @@
+streamlit
+streamlit_option_menu
+streamlit_cookies_controller
+opencv-python
+insightface
+onnxruntime
+ultralytics
+torch
+numpy==1.26.4
+Pillow
+sqlalchemy
+pandas
+plotly
+matplotlib
+bcrypt
+scikit-learn
