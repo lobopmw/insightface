@@ -1,17 +1,36 @@
-import face_recognition as fr
+# import os
+# import cv2
+# from insightface.app import FaceAnalysis
 
-# Carregar uma imagem de teste
-image = fr.load_image_file("images/images_students/Starley do Nascimento Lobo/2.jpg")
+# # Inicializa o modelo InsightFace
+# app = FaceAnalysis(providers=['CPUExecutionProvider'])
+# app.prepare(ctx_id=-1, det_size=(640, 640))
 
-# Localizar rostos na imagem
-face_locations = fr.face_locations(image)
+# # 🔁 Defina as variáveis corretamente
+# hash_pasta = "d4c72a593d936e48b6d8ddcbb4c34bc7bfcd88dc0a066c90fbf800fe55db4ef3"  # Ex: "fa35d3cfedb91a..."
+# nome_imagem = "cabeca_baixa_20250710_005828043087.jpg"  # Nome da imagem dentro da subpasta "frontal"
 
-# Checar se encontrou rostos
-if not face_locations:
-    print("Nenhum rosto detectado")
+# # 📂 Monta o caminho absoluto da imagem de forma segura
+# img_path = os.path.join("data", "alunos", hash_pasta, "cabeca_baixa", nome_imagem)
+
+# # 🖼️ Carrega e processa a imagem
+# img = cv2.imread(img_path)
+
+# if img is None:
+#     print(f"Erro ao carregar imagem em: {img_path}")
+# else:
+#     faces = app.get(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+#     print(f"✅ Rostos detectados: {len(faces)}")
+
+
+import pandas as pd
+import os
+
+csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'mapeamento_alunos.csv'))
+print("Usando:", csv_path)
+
+if os.path.exists(csv_path):
+    df = pd.read_csv(csv_path)
+    print(df.head())
 else:
-    # Obter os encodings dos rostos
-    face_encodings = fr.face_encodings(image, known_face_locations=face_locations)
-
-    for encoding in face_encodings:
-        print("Rosto detectado e encoding gerado com sucesso")
+    print("❌ Arquivo CSV não encontrado.")

@@ -8,10 +8,14 @@ from control_database import engine, registrar_usuario, user_table
 from streamlit_cookies_controller import CookieController
 from insightface_classroom import recognition_behavior
 from register_face_multi_images_avg import register_faces
+import os
+
 
 #-----------------------------------------------------------------------------------------------------------------------------------#
 # Configurações iniciais
 st.set_page_config(page_title="Monitoramento - SEDUC", page_icon="../images/icon_school.jpg", layout="wide")
+
+image_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/classroom1.jpg"))
 
 # Criando a tablea usuário
 user_table()
@@ -229,7 +233,7 @@ def main():
                 logo1, logo2, logo3 = st.columns([5, 10, 5])
                 with logo2:
                     
-                    st.image("../images/classroom1.jpg", width=300)
+                    st.image(image_path, width=300)
                     
                 # Variável de controle para a escolha da interface
                 if "selected_option" not in st.session_state:

@@ -14,13 +14,20 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 
-DATABASE_URI = f"sqlite:///{os.path.abspath('../model/behavior_data.db')}"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.path.join(BASE_DIR, "..", "model")
+os.makedirs(DB_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DB_DIR, "behavior_data.db")
+DATABASE_URI = f"sqlite:///{DB_PATH}"
+
 engine = create_engine(DATABASE_URI)
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------
 @contextmanager
 def connect_database():
-    conn = sqlite3.connect('../model/behavior_data.db')
+    conn = sqlite3.connect(DB_PATH)
     try:
         cursor = conn.cursor()
 
@@ -121,7 +128,7 @@ def df_behavior_charts():
 
 #------------------------------------------------------------------------------------------------------------------------------------------------
 def show_behavior_charts():
-    conn = sqlite3.connect('../model/behavior_data.db')
+    conn = sqlite3.connect(DB_PATH)
     st.sidebar.header("Filtros")
 
     students = pd.read_sql_query("SELECT DISTINCT student FROM behavior_log", conn)['student'].tolist()

@@ -13,10 +13,10 @@ __pycache__/
 .streamlit/
 
 # Dados gerados
-*.npy
-*.pkl
-*.db
-*.sqlite3
+# *.npy
+# *.pkl
+# *.db
+# *.sqlite3
 
 # Cache e arquivos temporários
 *.bak
