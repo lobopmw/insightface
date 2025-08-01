@@ -67,7 +67,7 @@ def login():
 
     with colbutton2:
 
-        if st.button("**➡ Login**", use_container_width=True, key="submit-button"):
+        if st.button("**➡ Login**", use_container_width=True, key="submit-button", type="primary"):
             
             if validar_cpf(cpf):
                 try:

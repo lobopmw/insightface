@@ -15,6 +15,13 @@ import plotly.graph_objects as go
 import os
 
 
+import io
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from PIL import Image
+import tempfile
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "..", "model")
 os.makedirs(DB_DIR, exist_ok=True)
@@ -139,6 +146,7 @@ def show_behavior_charts():
 
     selected_date = st.sidebar.date_input("Selecione a Data", value=datetime.datetime.today().date())
     selected_date = selected_date.strftime("%Y-%m-%d")
+    data_formatada = datetime.datetime.strptime(selected_date, "%Y-%m-%d").strftime("%d/%m/%y")
 
     query_check_date = f'''
         SELECT COUNT(*) FROM behavior_log
@@ -177,22 +185,34 @@ def show_behavior_charts():
 
     st.title(f"Aluno: {selected_student}")
 
+    cores = {
+    "Atento": "royalblue",
+    "Perguntando": "red",
+    "Escrevendo": "orange",
+    "Dormindo": "purple",
+    "Agitado": "green",
+    "Em Pé": "gray"
+}
+
     fig_pie = px.pie(
         df_behavior, 
         values='total_count', 
         names='behavior', 
-        title='Distribuição de Comportamentos', 
-        hole=0.3
+        title=f"Distribuição de Comportamentos - {selected_student} ({data_formatada})", 
+        hole=0.3, 
+        color_discrete_map=cores,
+        template="plotly_white"
     )
 
     fig_bar = px.bar(
         df_behavior, 
         x='behavior', 
         y='total_count', 
-        title='Contagem de Comportamentos', 
+        title=f"Contagem de Comportamentos - {selected_student} ({data_formatada})", 
         labels={'behavior': 'Comportamento', 'total_count': 'Quantidade'},
         color='behavior',
-        text='total_count'
+        text='total_count', 
+        template='plotly_white'
     )
     fig_bar.update_traces(textposition='outside')
 
@@ -224,33 +244,95 @@ def show_behavior_charts():
         df_final[behavior] = behavior_values
 
     df_final.fillna(0, inplace=True)
+    df_final['time'] = pd.to_datetime(df_final['time'])
     df_final.set_index('time', inplace=True)
+    horas_formatadas = df_final.index.strftime("%H:%M")
 
     fig_line = go.Figure()
     for column in df_final.columns:
         fig_line.add_trace(go.Scatter(
-            x=df_final.index,
+            x=horas_formatadas,
             y=df_final[column],
             mode='lines+markers',
-            name=column
+            name=column, 
+            line=dict(color=cores.get(column, 'black'))
         ))
 
     fig_line.update_layout(
-        title="Evolução Temporal dos Comportamentos",
-        xaxis_title="Tempo",
+        title=f"Evolução Temporal dos Comportamentos - {selected_student} ({data_formatada})",
+        xaxis_title="Hora",
         yaxis_title="Contagem Acumulada",
-        xaxis=dict(tickformat="%H:%M"),
         legend_title="Comportamentos",
         template="plotly_white"
     )
 
-    col_g1, col_g2, col_g3 = st.columns([2, 1, 2])
+    # col_g1, col_g2, col_g3 = st.columns([2, 1, 2])
+    # with col_g1:
+    #     st.plotly_chart(fig_pie, use_container_width=True)
+    # with col_g3:
+    #     st.plotly_chart(fig_bar, use_container_width=True)
+
+    # st.plotly_chart(fig_line, use_container_width=True)
+
+    # ----------------- Download de Gráficos -------------------
+
+    def gerar_download_plotly(fig, nome_arquivo):
+        buf = io.BytesIO()
+        fig.write_image(buf, format='png')
+        buf.seek(0)
+        st.download_button(
+            label=f"📥 Baixar gráfico: {nome_arquivo}",
+            data=buf,
+            file_name=f"{nome_arquivo}.png",
+            mime="image/png"
+        )
+        return buf
+
+    # Exibição dos gráficos com botões PNG
+    col_g1, col_g2, col_g3 = st.columns([2, 0.2, 2])
     with col_g1:
         st.plotly_chart(fig_pie, use_container_width=True)
+        pie_buf = gerar_download_plotly(fig_pie, f"distribuicao_{selected_student}_{data_formatada}")
+
     with col_g3:
         st.plotly_chart(fig_bar, use_container_width=True)
+        bar_buf = gerar_download_plotly(fig_bar, f"contagem_{selected_student}_{data_formatada}")
 
     st.plotly_chart(fig_line, use_container_width=True)
+    line_buf = gerar_download_plotly(fig_line, f"evolucao_temporal_{selected_student}_{data_formatada}")
+
+    # ----------------- PDF Único com os três gráficos -------------------
+    pdf_buf = io.BytesIO()
+    c = canvas.Canvas(pdf_buf, pagesize=A4)
+
+    def adicionar_pagina_pdf(buffer_img, titulo):
+        buffer_img.seek(0)
+        img = Image.open(buffer_img)
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+            img.convert("RGB").save(tmp_file.name)
+            temp_image_path = tmp_file.name
+
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(40, 800, f"{titulo} - Aluno: {selected_student} - Data: {data_formatada}")
+        c.drawImage(temp_image_path, 40, 100, width=500, preserveAspectRatio=True, mask='auto')
+        c.showPage()
+        os.unlink(temp_image_path)
+
+
+    adicionar_pagina_pdf(pie_buf, "Distribuição de Comportamentos")
+    adicionar_pagina_pdf(bar_buf, "Contagem de Comportamentos")
+    adicionar_pagina_pdf(line_buf, "Evolução Temporal dos Comportamentos")
+
+    c.save()
+    pdf_buf.seek(0)
+
+    st.download_button(
+        label="📄 Baixar TODOS os gráficos em PDF",
+        data=pdf_buf,
+        file_name=f"graficos_{selected_student}_{selected_date}.pdf",
+        mime="application/pdf"
+    )
 
 #------------------------------------------------------------------------------------------------------------------------------------------------
 def user_table():

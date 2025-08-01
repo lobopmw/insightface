@@ -280,7 +280,7 @@
 #             st.dataframe(filtered_df, use_container_width=True)
 
 
-#################################### ATUALIZAÇÃO 09/07/2025 #################################################################
+#################################### ATUALIZAÇÃO 09/07/2025 ACRESCENTANDO COMPORTAMENTO AGITADO E DISTRAIDO #################################################################
 import cv2
 from ultralytics import YOLO
 import numpy as np
@@ -308,6 +308,45 @@ image_path_faces = os.path.abspath(os.path.join(os.path.dirname(__file__), "../i
 image_path_cam = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/cam_IA.png"))
 image_path_table = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/table.png"))
 
+
+
+lateral_timers = {}
+
+### VERIFICANDO SE O ALUNO ESTÁ DE LADO #####
+def is_lateral_view(nose, le, re, threshold=0.5):
+    # Relação entre a distância dos olhos e a distância até o nariz
+    eyes_dist = abs(le[0] - re[0])
+    nose_eye_dist = abs(nose[0] - (le[0] + re[0]) / 2)
+
+    print(f"[DEBUG] Eyes_dist: {eyes_dist}, Nose offset: {nose_eye_dist}")
+    
+    # Quando a distância entre os olhos é pequena e o nariz está muito deslocado, é lateral
+    return eyes_dist < 50 and nose_eye_dist > 30
+
+
+
+## DISTRAÍDO ##
+def check_distracted_status(name, is_lateral, lateral_timers, timeout=10):
+    now = time.time()
+    if name not in lateral_timers:
+        lateral_timers[name] = {"start_time": None, "is_lateral": False}
+
+    if is_lateral:
+        if not lateral_timers[name]["is_lateral"]:
+            lateral_timers[name]["start_time"] = now
+            lateral_timers[name]["is_lateral"] = True
+        else:
+            elapsed = now - lateral_timers[name]["start_time"]
+            if elapsed >= timeout:
+                return "Distraído"
+    else:
+        lateral_timers[name]["start_time"] = None
+        lateral_timers[name]["is_lateral"] = False
+
+    return None
+
+
+## ATENDO, AGITADO, PERGUNTANDO, ESCREVENDO E DORMINDO
 def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
     
     shoulder_y = (ls[1] + rs[1]) / 2
@@ -344,9 +383,11 @@ def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
 
     return "Atento"
 
+## CRIPTOGRAFAR AS OS DADOS DO ALUNO ##
 def criptografar_nome_matricula(nome, matricula):
     return hashlib.sha256(f"{nome}_{matricula}".encode()).hexdigest()
 
+## FUNÇÃO PRINCIPAL ##
 def recognition_behavior():
     school = "Escola Estadual Criança Esperança"
     discipline = "Matemática"
@@ -532,6 +573,14 @@ def recognition_behavior():
                             confs = [p[2] for p in [nose, ls, rs, le, re, lw, rw]]
                             if all(c > CONFIDENCE_THRESHOLD for c in confs):
                                 current_behavior = classify_behavior(nose, ls, rs, le, re, lw, rw, CONFIDENCE_THRESHOLD)
+
+                                # Verifica se o aluno está de lado por mais de 10s
+                                if name_student != "Desconhecido":
+                                    lateral_status = is_lateral_view(nose, le, re)
+                                    new_behavior = check_distracted_status(name_student, lateral_status, lateral_timers, timeout=10)
+                                    if new_behavior:
+                                        current_behavior = new_behavior
+
                     #   ########################################################################################
                     #     # Coordenadas Y para depuração
                     #     cv2.putText(frame, f"Nose Y: {int(nose[1])}", (int(nose[0]), int(nose[1]) - 40),
