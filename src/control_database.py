@@ -22,6 +22,14 @@ from PIL import Image
 import tempfile
 
 
+import os  # se ainda não tiver
+
+# Caminhos padrão (relativos à pasta src/)
+HERE = os.path.dirname(__file__)
+DATA_DIR = os.path.abspath(os.path.join(HERE, "..", "data"))
+MAPPING_CSV = os.getenv("MAPPING_CSV", os.path.join(DATA_DIR, "mapeamento_alunos.csv"))
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR = os.path.join(BASE_DIR, "..", "model")
 os.makedirs(DB_DIR, exist_ok=True)
@@ -133,7 +141,7 @@ def df_behavior_charts():
 
     return df
 
-#------------------------------------------------------------------------------------------------------------------------------------------------
+#-------------------------------- Gráficos com nome somente o primeiro nome do aluno ----------------------------------------
 def show_behavior_charts():
     conn = sqlite3.connect(DB_PATH)
     st.sidebar.header("Filtros")
@@ -334,7 +342,7 @@ def show_behavior_charts():
         mime="application/pdf"
     )
 
-#------------------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------- Tabela do usuário -------------------------------------------------------------------------------------------
 def user_table():
     try:
         metadata = MetaData()
