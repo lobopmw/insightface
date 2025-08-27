@@ -2549,7 +2549,6 @@
 
 ###################################################### ATUALIZAÇÃO PARA COLORIR BOUNDING BOX -  21/08/2025 ###########################################################################
 
-########################## ATUALIZAÇÃO PARA MELHORIA NO RECONHECIMENTO COMPORTAMENTAL DISTANCIANDO DA CAMERA DIA 19/08/2025 ############################################################
 
 # ======= LOW-LATENCY: defina opções do FFmpeg ANTES de importar cv2 =======
 import os
@@ -2582,6 +2581,11 @@ from collections import deque
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+# suavização de "Dormindo"
+sleep_smoother = {}
+ENTER_SLEEP_FRAMES = 6   # ~0.5s @ 12 fps para ENTRAR em "Dormindo"
+EXIT_SLEEP_FRAMES  = 10  # ~0.8s para SAIR de "Dormindo"
+
 # Paths
 DATA_DIR       = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 DATABASE_PATH  = os.path.join(DATA_DIR, "alunos")                 # pasta dos alunos
@@ -2609,7 +2613,7 @@ def iou(a, b):
     area_b = (bx2 - bx1) * (by2 - by1)
     return inter / float(area_a + area_b - inter + 1e-6)
 
-NAME_TTL = 3.0  # segura o nome por N segundos quando a face some
+NAME_TTL = 8.0  # segura o nome por N segundos quando a face some
 _name_mem = deque(maxlen=80)
 
 def remember_name(box, name):
@@ -2624,7 +2628,7 @@ def resolve_name(person_box):
         i = iou(person_box, item["box"])
         if i > best:
             best, who = i, item["name"]
-    return who if best > 0.05 else "Desconhecido"
+    return who if best > 0.03 else "Desconhecido"
 
 # ---------------- Detector em thread separada (IA fora do loop de render) ----------------
 class DetectorWorker:
@@ -2679,7 +2683,7 @@ class DetectorWorker:
                 continue
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             faces = self.model_face.get(rgb)
-            results = self.model_pose.predict(frame, show=False, device=self.device, verbose=False)
+            results = self.model_pose.predict(frame, show=False, device=self.device, verbose=False, imgsz=896, conf=0.35, half=(self.device == "cuda"))
             with self._lock:
                 self._last_faces = faces
                 self._last_results = results
@@ -2708,43 +2712,145 @@ def check_distracted_status(name, is_lateral, lateral_timers, timeout=10):
     return None
 
 # ====== NOVA FUNÇÃO: sem "Escrevendo", Dormindo tolerante à distância ======
+# def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
+#     """
+#     Classifica: Perguntando, Agitado, Dormindo, Atento.
+#     - Mantém as regras de mãos levantadas (Perguntando/Agitado).
+#     - Remove 'Escrevendo'.
+#     - 'Dormindo' usa proximidade vertical do nariz aos COTOVELOS
+#       e tolera distância (pessoa pequena no quadro).
+#     Keypoints (YOLO pose):
+#       0: nariz | 1-2: olhos | 5-6: ombros (ls, rs) | 7-8: cotovelos (le, re) | 9-10: punhos (lw, rw)
+#     """
+
+#     # Linha média dos ombros e escala (largura ombro-a-ombro) para normalizar limiares
+#     shoulder_y = (ls[1] + rs[1]) / 2.0
+#     s = max(1.0, abs(ls[0] - rs[0]))  # evita zero
+
+#     # Distâncias úteis
+#     wrist_distance = abs(lw[0] - rw[0])                       # separação horizontal das mãos
+#     best_vert_dist = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))  # nariz→cotovelo mais próximo (vertical)
+
+#     # ------------------ REGRAS MÃOS LEVANTADAS (mantidas) ------------------
+#     if lw[1] < nose[1] and rw[1] < nose[1]:
+#         return "Agitado" if wrist_distance > 200 else "Perguntando"
+#     if lw[1] < nose[1] or rw[1] < nose[1]:
+#         return "Perguntando"
+
+#     # ------------------ DORMINDO (nariz perto dos COTOVELOS) ------------------
+#     near_thr = max(10.0, 0.32 * s)                 # mais permissivo p/ distância
+#     nose_below_shoulder = (nose[1] > shoulder_y - 0.18 * s)  # relaxado p/ distância
+
+#     if best_vert_dist <= near_thr and (s < 65 or nose_below_shoulder):
+#         return "Dormindo"
+
+#     # ------------------ ATENTO (postura normal) ------------------
+#     if nose[1] < shoulder_y - 0.15 * s:
+#         return "Atento"
+
+#     return "Atento"
+
+### VERSÃO BOA TBM #############################################
+# def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
+#     cx = (ls[0] + rs[0]) / 2.0
+#     cy = (ls[1] + rs[1]) / 2.0
+#     s  = float(abs(ls[0] - rs[0])) + 1e-6  # escala
+
+#     # mãos acima do ombro -> Perguntando/Agitado (robusto à distância)
+#     up_L = lw[1] < (cy - 0.12 * s)
+#     up_R = rw[1] < (cy - 0.12 * s)
+#     if up_L and up_R:
+#         return "Agitado" if abs(lw[0] - rw[0]) > 0.9 * s else "Perguntando"
+#     if up_L or up_R:
+#         return "Perguntando"
+
+#     # --- Dormindo: cabeça baixa, centralizada; braços baixos ---
+#     dy = nose[1] - cy
+#     dx = abs(nose[0] - cx)
+#     elbows_low = (le[1] > cy - 0.10 * s) and (re[1] > cy - 0.10 * s)
+#     wrists_low = (lw[1] > cy - 0.05 * s) and (rw[1] > cy - 0.05 * s)
+#     if dy > 0.28 * s and dx < 0.22 * s and elbows_low and wrists_low:
+#         return "Dormindo"
+
+#     # padrão
+#     return "Atento" if nose[1] < (cy - 0.15 * s) else "Atento"
+
+######## VERSÃO MAIS BOA, POREM DORMINDO RUIM ####################################
+# def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
+#     # escala da pessoa (ombro a ombro)
+#     cx = (ls[0] + rs[0]) / 2.0
+#     cy = (ls[1] + rs[1]) / 2.0
+#     s  = float(abs(ls[0] - rs[0])) + 1e-6
+
+#     # 1) MÃOS ACIMA DO OMBRO -> Perguntando/Agitado (robusto à distância)
+#     up_L = lw[1] < (cy - 0.12 * s)
+#     up_R = rw[1] < (cy - 0.12 * s)
+#     if up_L and up_R:
+#         return "Agitado" if abs(lw[0] - rw[0]) > 0.90 * s else "Perguntando"
+#     if up_L or up_R:
+#         return "Perguntando"
+
+#     # 2) DORMINDO (nariz perto de braços + braços baixos)
+#     #    cobre "cabeça deitada no braço" mesmo com nariz acima da linha dos ombros
+#     best_vert_elbow = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
+#     best_vert_wrist = min(abs(nose[1] - lw[1]), abs(nose[1] - rw[1]))
+#     elbows_low = (le[1] > cy - 0.10 * s) and (re[1] > cy - 0.10 * s)
+#     wrists_low = (lw[1] > cy - 0.05 * s) and (rw[1] > cy - 0.05 * s)
+#     head_centered = abs(nose[0] - cx) < 0.30 * s
+
+#     # limiares tolerantes para distância (pessoa pequena)
+#     NEAR_ELBOW_THR = 0.22 * s
+#     NEAR_WRIST_THR = 0.20 * s
+
+#     if head_centered and (elbows_low or wrists_low) and \
+#        (best_vert_elbow <= NEAR_ELBOW_THR or best_vert_wrist <= NEAR_WRIST_THR):
+#         return "Dormindo"
+
+#     # 3) fallback simples (postura ereta)
+#     return "Atento" if nose[1] < (cy - 0.15 * s) else "Atento"
 def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
-    """
-    Classifica: Perguntando, Agitado, Dormindo, Atento.
-    - Mantém as regras de mãos levantadas (Perguntando/Agitado).
-    - Remove 'Escrevendo'.
-    - 'Dormindo' usa proximidade vertical do nariz aos COTOVELOS
-      e tolera distância (pessoa pequena no quadro).
-    Keypoints (YOLO pose):
-      0: nariz | 1-2: olhos | 5-6: ombros (ls, rs) | 7-8: cotovelos (le, re) | 9-10: punhos (lw, rw)
-    """
+    cx = (ls[0] + rs[0]) / 2.0
+    cy = (ls[1] + rs[1]) / 2.0
+    s  = float(abs(ls[0] - rs[0]))
 
-    # Linha média dos ombros e escala (largura ombro-a-ombro) para normalizar limiares
-    shoulder_y = (ls[1] + rs[1]) / 2.0
-    s = max(1.0, abs(ls[0] - rs[0]))  # evita zero
-
-    # Distâncias úteis
-    wrist_distance = abs(lw[0] - rw[0])                       # separação horizontal das mãos
-    best_vert_dist = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))  # nariz→cotovelo mais próximo (vertical)
-
-    # ------------------ REGRAS MÃOS LEVANTADAS (mantidas) ------------------
-    if lw[1] < nose[1] and rw[1] < nose[1]:
-        return "Agitado" if wrist_distance > 200 else "Perguntando"
-    if lw[1] < nose[1] or rw[1] < nose[1]:
+    # mãos acima do ombro = Perguntando/Agitado (mantido)
+    up_L = lw[1] < (cy - 0.12 * s)
+    up_R = rw[1] < (cy - 0.12 * s)
+    if up_L and up_R:
+        return "Agitado" if abs(lw[0] - rw[0]) > 0.9 * s else "Perguntando"
+    if up_L or up_R:
         return "Perguntando"
 
-    # ------------------ DORMINDO (nariz perto dos COTOVELOS) ------------------
-    near_thr = max(10.0, 0.32 * s)                 # mais permissivo p/ distância
-    nose_below_shoulder = (nose[1] > shoulder_y - 0.18 * s)  # relaxado p/ distância
+    # -------- Dormindo (ajustes p/ distância e cabeça de lado) --------
+    MIN_S_FOR_SLEEP  = 30.0       # antes 45.0 (libera s≈42)
+    DY_COEF          = 0.14       # antes 0.18–0.22 (mais tolerante)
+    # tolera mais lateral quando a pessoa está longe
+    DX_COEF_NEAR     = 0.35       # s >= 50
+    DX_COEF_FAR      = 0.55       # s < 50  (aceita cabeça bem de lado)
+    DX_COEF          = DX_COEF_NEAR if s >= 50 else DX_COEF_FAR
 
-    if best_vert_dist <= near_thr and (s < 65 or nose_below_shoulder):
-        return "Dormindo"
+    # fallback: nariz perto do cotovelo (apoiado no braço)
+    ELBOW_NEAR_COEF  = 0.26       # ~24% de s na vertical
 
-    # ------------------ ATENTO (postura normal) ------------------
-    if nose[1] < shoulder_y - 0.15 * s:
+    dy = nose[1] - cy
+    dx = abs(nose[0] - cx)
+    best_elbow = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
+
+    hands_not_up = (lw[1] > cy - 0.10 * s) and (rw[1] > cy - 0.10 * s)
+
+    if s >= MIN_S_FOR_SLEEP and hands_not_up:
+        rule_head_low  = (dy > DY_COEF * s) and (dx < DX_COEF * s)
+        rule_elbow_near = (best_elbow < ELBOW_NEAR_COEF * s) and (nose[1] > cy - 0.10 * s)
+        if rule_head_low or rule_elbow_near:
+            return "Dormindo"
+
+    # padrão
+    if nose[1] < (cy - 0.15 * s):
         return "Atento"
-
     return "Atento"
+
+
+
 
 
 ######## CRIPTOGRAFAR NOMES ####################
@@ -2978,17 +3084,17 @@ def recognition_behavior():
         run_system = col1.button("Iniciar Monitoramento")
         stop_system = col2.button("Parar Monitoramento")
 
-        model = YOLO('yolo11n-pose.pt')
+        model = YOLO('yolo11m-pose.pt')
         behavior_tracker = {}
         BOX_MARGIN_RATIO = 0.2
 
         # FaceAnalysis
         if device == "cuda":
             model_face = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider","CPUExecutionProvider"])
-            model_face.prepare(ctx_id=0, det_size=(640,640))
+            model_face.prepare(ctx_id=0, det_size=(832,832))
         else:
             model_face = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-            model_face.prepare(ctx_id=-1, det_size=(640,640))
+            model_face.prepare(ctx_id=-1, det_size=(832,832))
 
         # Embeddings conhecidos + normalização fora do loop
         known_face_encodings, known_face_names = load_insightface_data()
@@ -3007,7 +3113,7 @@ def recognition_behavior():
             fps_limit = 12
             prev_time = 0.0
 
-            video_stream = VideoStream(("127.0.0.1", 5555)).start()
+            video_stream = VideoStream(("172.16.5.158", 5555)).start()
             st.session_state.video_stream = video_stream
 
             # flush rápido para pegar frame atual
@@ -3057,7 +3163,7 @@ def recognition_behavior():
                         # desenhar HUD no canto esquerdo (uma vez por frame; atualiza com a última pessoa válida)
                         hud_lines = []
 
-                        for person_keypoints in keypoints_all:
+                        for pid, person_keypoints in enumerate(keypoints_all):
                             if len(person_keypoints) == 0:
                                 continue
 
@@ -3104,6 +3210,28 @@ def recognition_behavior():
                                     new_behavior = check_distracted_status(name_student, lateral_status, lateral_timers, timeout=10)
                                     if new_behavior:
                                         current_behavior = new_behavior
+
+
+                            # =================== HISTERese Dormindo <-> Atento (COLE AQUI) ===================
+                                raw_behavior = current_behavior
+                                key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
+                                state = sleep_smoother.setdefault(key, {"state": "Atento", "sleep": 0, "awake": 0})
+
+                                if raw_behavior == "Dormindo":
+                                    state["sleep"] += 1
+                                    state["awake"] = 0
+                                    if state["state"] != "Dormindo" and state["sleep"] >= ENTER_SLEEP_FRAMES:
+                                        state["state"] = "Dormindo"
+                                else:
+                                    state["awake"] += 1
+                                    state["sleep"] = 0
+                                    if state["state"] == "Dormindo" and state["awake"] >= EXIT_SLEEP_FRAMES:
+                                        state["state"] = raw_behavior  # volta para Atento/Perguntando/Agitado
+
+                                current_behavior = state["state"]
+                                # =================== FIM DA HISTERese ============================================
+
+
 
                             # Registro no DB (transições)
                             date = datetime.datetime.now().strftime("%Y-%m-%d")
