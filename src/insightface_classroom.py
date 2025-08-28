@@ -2689,10 +2689,60 @@ class DetectorWorker:
                 self._last_results = results
 
 # ---------------- Funções auxiliares de comportamento ----------------
-def is_lateral_view(nose, le, re, threshold=0.5):
-    eyes_dist = abs(le[0] - re[0])
-    nose_eye_dist = abs(nose[0] - (le[0] + re[0]) / 2)
-    return eyes_dist < 50 and nose_eye_dist > 30
+def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5):
+    """
+    Retorna True se a cabeça estiver de lado.
+    Sinais usados:
+      - deslocamento horizontal do nariz em relação ao centro dos OLHOS (principal);
+      - assimetria de confiança dos olhos (um some, outro não);
+      - fallback: orelhas (quando olhos têm baixa confiança), com mesmo critério.
+    Limiar se ajusta conforme a escala s (ombro a ombro).
+    """
+    # escala da pessoa
+    s = float(abs(ls[0] - rs[0])) + 1e-6
+
+    # limiar dinâmico p/ razão de deslocamento (nariz vs olhos)
+    if s < 40:
+        t_ratio = 0.22
+    elif s < 60:
+        t_ratio = 0.28
+    else:
+        t_ratio = 0.34
+
+    # --- OLHOS ---
+    eye_dx = float(abs(l_eye[0] - r_eye[0]))
+    ratio_eyes = 0.0
+    cond_ratio_eyes = False
+    if eye_dx >= 1.0:
+        ratio_eyes = abs(nose[0] - (l_eye[0] + r_eye[0]) / 2.0) / eye_dx
+        cond_ratio_eyes = (ratio_eyes > t_ratio)
+
+    # assimetria de confiança dos olhos (um muito baixo e outro alto)
+    cond_conf_eyes = (
+        (l_eye[2] < conf_thr and r_eye[2] > conf_thr + 0.1) or
+        (r_eye[2] < conf_thr and l_eye[2] > conf_thr + 0.1)
+    )
+
+    # --- ORELHAS (fallback) ---
+    cond_ears = False
+    # se ao menos uma orelha tem boa confiança, tenta usar
+    if (l_ear[2] > conf_thr) or (r_ear[2] > conf_thr):
+        ear_dx = float(abs(l_ear[0] - r_ear[0]))
+        if ear_dx >= 1.0:
+            ratio_ears = abs(nose[0] - (l_ear[0] + r_ear[0]) / 2.0) / ear_dx
+            # ligeiramente mais permissivo no fallback
+            cond_ratio_ears = ratio_ears > (t_ratio * 0.90)
+        else:
+            cond_ratio_ears = False
+
+        # assimetria de confiança das orelhas
+        cond_conf_ears = (
+            (l_ear[2] < conf_thr and r_ear[2] > conf_thr + 0.1) or
+            (r_ear[2] < conf_thr and l_ear[2] > conf_thr + 0.1)
+        )
+        cond_ears = cond_ratio_ears or cond_conf_ears
+
+    return cond_ratio_eyes or cond_conf_eyes or cond_ears
 
 def check_distracted_status(name, is_lateral, lateral_timers, timeout=10):
     now = time.time()
@@ -2705,7 +2755,7 @@ def check_distracted_status(name, is_lateral, lateral_timers, timeout=10):
         else:
             elapsed = now - (lateral_timers[name]["start_time"] or now)
             if elapsed >= timeout:
-                return "Distraído"
+                return "Distraido"
     else:
         lateral_timers[name]["start_time"] = None
         lateral_timers[name]["is_lateral"] = False
@@ -2809,45 +2859,42 @@ def check_distracted_status(name, is_lateral, lateral_timers, timeout=10):
 #     # 3) fallback simples (postura ereta)
 #     return "Atento" if nose[1] < (cy - 0.15 * s) else "Atento"
 def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
+    """
+    0:nose | 5-6: ombros (ls, rs) | 7-8: cotovelos (le, re) | 9-10: punhos (lw, rw)
+    """
     cx = (ls[0] + rs[0]) / 2.0
     cy = (ls[1] + rs[1]) / 2.0
-    s  = float(abs(ls[0] - rs[0]))
+    s  = max(1.0, float(abs(ls[0] - rs[0])))   # escala ombro-a-ombro
 
-    # mãos acima do ombro = Perguntando/Agitado (mantido)
-    up_L = lw[1] < (cy - 0.12 * s)
-    up_R = rw[1] < (cy - 0.12 * s)
+    # --- MÃOS ALTAS -> Perguntando/Agitado (robusto à distância) ---
+    up_L = (lw[1] < nose[1]) or (lw[1] < (cy - 0.14 * s))
+    up_R = (rw[1] < nose[1]) or (rw[1] < (cy - 0.14 * s))
     if up_L and up_R:
-        return "Agitado" if abs(lw[0] - rw[0]) > 0.9 * s else "Perguntando"
+        return "Agitado" if abs(lw[0] - rw[0]) > 0.90 * s else "Perguntando"
     if up_L or up_R:
         return "Perguntando"
 
-    # -------- Dormindo (ajustes p/ distância e cabeça de lado) --------
-    MIN_S_FOR_SLEEP  = 30.0       # antes 45.0 (libera s≈42)
-    DY_COEF          = 0.14       # antes 0.18–0.22 (mais tolerante)
-    # tolera mais lateral quando a pessoa está longe
-    DX_COEF_NEAR     = 0.35       # s >= 50
-    DX_COEF_FAR      = 0.55       # s < 50  (aceita cabeça bem de lado)
-    DX_COEF          = DX_COEF_NEAR if s >= 50 else DX_COEF_FAR
-
-    # fallback: nariz perto do cotovelo (apoiado no braço)
-    ELBOW_NEAR_COEF  = 0.26       # ~24% de s na vertical
+    # --- DORMINDO: cabeça baixa OU nariz próximo do cotovelo (apoio no braço) ---
+    MIN_S_FOR_SLEEP = 28.0
+    DY_COEF   = 0.14
+    DX_COEF   = 0.35 if s >= 50 else 0.55   # tolera cabeça de lado se estiver longe
+    ELB_NEAR  = 0.26
 
     dy = nose[1] - cy
     dx = abs(nose[0] - cx)
     best_elbow = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
+    hands_low  = (lw[1] > cy - 0.08 * s) and (rw[1] > cy - 0.08 * s)
+    elbows_low = (le[1] > cy - 0.12 * s) and (re[1] > cy - 0.12 * s)
 
-    hands_not_up = (lw[1] > cy - 0.10 * s) and (rw[1] > cy - 0.10 * s)
-
-    if s >= MIN_S_FOR_SLEEP and hands_not_up:
-        rule_head_low  = (dy > DY_COEF * s) and (dx < DX_COEF * s)
-        rule_elbow_near = (best_elbow < ELBOW_NEAR_COEF * s) and (nose[1] > cy - 0.10 * s)
-        if rule_head_low or rule_elbow_near:
+    if s >= MIN_S_FOR_SLEEP and hands_low and elbows_low:
+        head_low_ok   = (dy > DY_COEF * s) and (dx < DX_COEF * s)
+        elbow_near_ok = (best_elbow < ELB_NEAR * s) and (nose[1] > cy - 0.10 * s)
+        if head_low_ok or elbow_near_ok:
             return "Dormindo"
 
-    # padrão
-    if nose[1] < (cy - 0.15 * s):
-        return "Atento"
+    # --- fallback ---
     return "Atento"
+
 
 
 
@@ -3071,7 +3118,7 @@ def recognition_behavior():
         with col_img2:
             st.title("MONITORAMENTO")
 
-        CONFIDENCE_THRESHOLD = st.sidebar.slider("Confiança Mínima", 0.1, 1.0, 0.5, 0.7)
+        CONFIDENCE_THRESHOLD = st.sidebar.slider("Confiança Mínima", 0.10, 0.80, 0.35, 0.05)
         use_gpu = st.sidebar.checkbox("Usar GPU (CUDA)", value=True)
         device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
         st.sidebar.write(f"Dispositivo: {device}")
@@ -3203,11 +3250,22 @@ def recognition_behavior():
 
                             # Distraído (só quando tem nome válido)
                             if name_student != "Desconhecido" and person_keypoints.shape[0] > 10:
-                                nose = person_keypoints[0]
-                                le, re = person_keypoints[7], person_keypoints[8]
-                                if all(p[2] > CONFIDENCE_THRESHOLD for p in [nose, le, re]):
-                                    lateral_status = is_lateral_view(nose, le, re)
-                                    new_behavior = check_distracted_status(name_student, lateral_status, lateral_timers, timeout=10)
+                                nose  = person_keypoints[0]
+                                l_eye = person_keypoints[1]   # olho E
+                                r_eye = person_keypoints[2]   # olho D
+                                l_ear = person_keypoints[3]   # orelha E
+                                r_ear = person_keypoints[4]   # orelha D
+                                ls    = person_keypoints[5]   # ombro E
+                                rs    = person_keypoints[6]   # ombro D
+
+                                # só roda se temos nariz + ao menos um par (olhos ou orelhas) usável
+                                if nose[2] > CONFIDENCE_THRESHOLD:
+                                    lateral_status = is_lateral_view(
+                                        nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=CONFIDENCE_THRESHOLD
+                                    )
+                                    new_behavior = check_distracted_status(
+                                        name_student, lateral_status, lateral_timers, timeout=10
+                                    )
                                     if new_behavior:
                                         current_behavior = new_behavior
 
@@ -3215,18 +3273,18 @@ def recognition_behavior():
                             # =================== HISTERese Dormindo <-> Atento (COLE AQUI) ===================
                                 raw_behavior = current_behavior
                                 key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
-                                state = sleep_smoother.setdefault(key, {"state": "Atento", "sleep": 0, "awake": 0})
+                                state = sleep_smoother.setdefault(key, {"state":"Atento","sleep":0,"awake":0})
 
                                 if raw_behavior == "Dormindo":
-                                    state["sleep"] += 1
-                                    state["awake"] = 0
+                                    state["sleep"] += 1; state["awake"] = 0
                                     if state["state"] != "Dormindo" and state["sleep"] >= ENTER_SLEEP_FRAMES:
                                         state["state"] = "Dormindo"
                                 else:
-                                    state["awake"] += 1
-                                    state["sleep"] = 0
+                                    state["awake"] += 1; state["sleep"] = 0
                                     if state["state"] == "Dormindo" and state["awake"] >= EXIT_SLEEP_FRAMES:
-                                        state["state"] = raw_behavior  # volta para Atento/Perguntando/Agitado
+                                        state["state"] = raw_behavior
+                                    elif state["state"] != "Dormindo":
+                                        state["state"] = raw_behavior
 
                                 current_behavior = state["state"]
                                 # =================== FIM DA HISTERese ============================================
@@ -3250,7 +3308,7 @@ def recognition_behavior():
 
                             # ------------------- Desenho da caixa/label (com cor por comportamento) -------------------
                             # BGR: vermelho (0,0,255) para Agitado/Dormindo; verde (0,255,0) para os demais
-                            box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo") else (0, 255, 0)
+                            box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
 
                             cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
                             label = f"{name_student} -> {current_behavior}"
