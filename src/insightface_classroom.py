@@ -608,7 +608,7 @@ def recognition_behavior():
                                         current_behavior = new_behavior
 
 
-                            # =================== HISTERese Dormindo <-> Atento (COLE AQUI) ===================
+                            # =================== HISTERese Dormindo <-> Atento ===================
                                 raw_behavior = current_behavior
                                 key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
                                 state = sleep_smoother.setdefault(key, {"state":"Atento","sleep":0,"awake":0})
