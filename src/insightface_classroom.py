@@ -649,9 +649,32 @@ def recognition_behavior():
                             box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
 
                             cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
-                            label = f"{name_student} -> {current_behavior}"
-                            cv2.putText(frame, label, (x_min, y_min - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2)
+                            
+                            name_text =  f"{name_student}"
+                            behavior_text = f"{current_behavior}"
+
+                            font = cv2.FONT_HERSHEY_SIMPLEX
+                            scale = 0.6
+                            thickness_name = 2
+                            thickness_behavior = 1
+
+                            (name_w, name_h), _ = cv2.getTextSize(name_text, font, scale, thickness_name)
+                            (beh_w, beh_h), _ = cv2.getTextSize(behavior_text, font, scale, thickness_behavior)
+
+                            text_w = max(name_w, beh_w)
+                            text_h = name_h + beh_h + 10
+
+                            box_center_x = (x_min + x_max) // 2
+                            text_x = box_center_x + text_w // 2
+                            text_y = y_min - 8 
+
+                            cv2.rectangle(frame, (text_x - 3, text_y - text_h - 5), (text_x + text_w + 3, text_y), box_color, -1) # fundo da caixa
+                            
+                            cv2.putText(frame, name_text, (text_x, text_y - beh_h - 8), font, scale, (0, 0, 0), thickness_name, cv2.LINE_AA) # Nome 
+                            cv2.putText(frame, name_text, (text_x, text_y - beh_h - 8), font, scale, (0, 0, 0), 1, cv2.LINE_AA) # Contorno nome
+                        
+                            cv2.putText(frame, behavior_text, (text_x, text_y - 2), font, scale, (0, 0, 0), thickness_behavior, cv2.LINE_AA) # Comportamento 
+                            cv2.putText(frame, behavior_text, (text_x, text_y - 2), font, scale, (0, 0, 0), 1, cv2.LINE_AA) # Contorno comportamento 
 
                             # -------- HUD de debug no canto esquerdo --------
                             if show_debug and have_all:
