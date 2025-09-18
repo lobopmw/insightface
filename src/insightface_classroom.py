@@ -646,35 +646,36 @@ def recognition_behavior():
 
                             # ------------------- Desenho da caixa/label (com cor por comportamento) -------------------
                             # BGR: vermelho (0,0,255) para Agitado/Dormindo; verde (0,255,0) para os demais
+
                             box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
 
                             cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
                             
-                            name_text =  f"{name_student}"
-                            behavior_text = f"{current_behavior}"
+                            label_text =  f"{name_student} - {current_behavior}"
 
+                            
                             font = cv2.FONT_HERSHEY_SIMPLEX
                             scale = 0.6
-                            thickness_name = 2
-                            thickness_behavior = 1
+                            thickness = 2
+                            pad_x, pad_y = 6, 4
 
-                            (name_w, name_h), _ = cv2.getTextSize(name_text, font, scale, thickness_name)
-                            (beh_w, beh_h), _ = cv2.getTextSize(behavior_text, font, scale, thickness_behavior)
-
-                            text_w = max(name_w, beh_w)
-                            text_h = name_h + beh_h + 10
-
-                            box_center_x = (x_min + x_max) // 2
-                            text_x = box_center_x + text_w // 2
-                            text_y = y_min - 8 
-
-                            cv2.rectangle(frame, (text_x - 3, text_y - text_h - 5), (text_x + text_w + 3, text_y), box_color, -1) # fundo da caixa
+                            # Tamanho do texto
+                            (text_w, text_h), _ = cv2.getTextSize(label_text, font, scale, thickness)
                             
-                            cv2.putText(frame, name_text, (text_x, text_y - beh_h - 8), font, scale, (0, 0, 0), thickness_name, cv2.LINE_AA) # Nome 
-                            cv2.putText(frame, name_text, (text_x, text_y - beh_h - 8), font, scale, (0, 0, 0), 1, cv2.LINE_AA) # Contorno nome
-                        
-                            cv2.putText(frame, behavior_text, (text_x, text_y - 2), font, scale, (0, 0, 0), thickness_behavior, cv2.LINE_AA) # Comportamento 
-                            cv2.putText(frame, behavior_text, (text_x, text_y - 2), font, scale, (0, 0, 0), 1, cv2.LINE_AA) # Contorno comportamento 
+
+                            # Posição: canto superior esquerdo da box
+                            tx = int(x_min)
+                            ty = int(y_min)
+
+                            top = ty - text_h - 2*pad_y
+                            if top < 0:
+                                top = ty
+                                ty = top + text_h + pad_y
+
+                            cv2.rectangle(frame, (tx, top), (tx + text_w + 2*pad_x, top + text_h + 2*pad_y), box_color, -1) # Fundo da cor da box
+                            
+                            cv2.putText(frame, label_text, (tx + pad_x, top + text_h + pad_y - 1), font, scale, (255, 255, 255), thickness, cv2.LINE_AA) # Texto branco por cima
+                             
 
                             # -------- HUD de debug no canto esquerdo --------
                             if show_debug and have_all:
