@@ -28,10 +28,16 @@ from collections import deque
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# suavização de "Dormindo"
+# Suavização de "Dormindo"
 sleep_smoother = {}
 ENTER_SLEEP_FRAMES = 6  
 EXIT_SLEEP_FRAMES  = 10  
+
+# Configuração da câmera
+CAM_SETUP = 'LEFT'
+CAM_YAW_OFFSET = 12.0
+YAW_LATERAL_THRESH = 28.0
+
 
 # Paths
 DATA_DIR       = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
@@ -135,7 +141,7 @@ class DetectorWorker:
                 self._last_results = results
 
 # ---------------- Funções auxiliares de comportamento ----------------
-def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5):
+def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5, cam_side="LEFT", cam_offset=0.12):
    
     # escala da pessoa
     s = float(abs(ls[0] - rs[0])) + 1e-6
@@ -148,13 +154,25 @@ def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5):
     else:
         t_ratio = 0.34
 
+    # offset conforme o lado da camera
+
+    if cam_side == "LEFT":
+        offset = -cam_offset
+    if cam_side == "RIGHT":
+        offset = +cam_offset
+    else:
+        offset = 0.0
+
+    
+
     # --- OLHOS ---
     eye_dx = float(abs(l_eye[0] - r_eye[0]))
-    ratio_eyes = 0.0
     cond_ratio_eyes = False
+
     if eye_dx >= 1.0:
         ratio_eyes = abs(nose[0] - (l_eye[0] + r_eye[0]) / 2.0) / eye_dx
-        cond_ratio_eyes = (ratio_eyes > t_ratio)
+        ratio_eyes_corr = ratio_eyes + offset
+        cond_ratio_eyes = abs(ratio_eyes_corr) > t_ratio
 
     # assimetria de confiança dos olhos (um muito baixo e outro alto)
     cond_conf_eyes = (
@@ -169,8 +187,11 @@ def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5):
         ear_dx = float(abs(l_ear[0] - r_ear[0]))
         if ear_dx >= 1.0:
             ratio_ears = abs(nose[0] - (l_ear[0] + r_ear[0]) / 2.0) / ear_dx
+
+            ratio_ears_corr = ratio_ears + offset
+
             # ligeiramente mais permissivo no fallback
-            cond_ratio_ears = ratio_ears > (t_ratio * 0.90)
+            cond_ratio_ears = ratio_ears_corr > (t_ratio * 0.90)
         else:
             cond_ratio_ears = False
 
@@ -495,7 +516,7 @@ def recognition_behavior():
             messege.empty()
             stframe = st.empty()
 
-            fps_limit = 12
+            fps_limit = 20
             prev_time = 0.0
 
             video_stream = VideoStream(("172.16.5.158", 5555)).start()
@@ -696,8 +717,11 @@ def recognition_behavior():
                                 y0 = 24
                                 for i, text in enumerate(hud_lines):
                                     cv2.putText(frame, text, (10, y0 + int(i * 22 * debug_font)),
+                                                
                                                 cv2.FONT_HERSHEY_SIMPLEX, debug_font, (255, 255, 0), 2)
-
+                                    
+                            
+                            
                 # Render leve
                 disp = cv2.resize(frame, (960, 540))
                 stframe.image(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
