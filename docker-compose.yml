@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: insightface_postgres
+    environment:
+      POSTGRES_DB: insightface_db
+      POSTGRES_USER: insightface_user
+      POSTGRES_PASSWORD: insightface_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U insightface_user -d insightface_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - insightface_network
+
+  app:
+    build: .
+    container_name: insightface_app
+    ports:
+      - "8501:8501"
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=insightface_db
+      - DB_USER=insightface_user
+      - DB_PASSWORD=insightface_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+    networks:
+      - insightface_network
+
+volumes:
+  postgres_data:
+
+networks:
+  insightface_network:
+    driver: bridge
