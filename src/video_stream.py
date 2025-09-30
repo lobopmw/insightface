@@ -1,4 +1,3 @@
-# video_stream.py
 import cv2
 import threading
 import time

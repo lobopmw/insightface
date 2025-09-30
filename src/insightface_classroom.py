@@ -14,17 +14,19 @@ import streamlit as st
 import pandas as pd
 from datetime import timedelta
 import datetime
-from control_database import insert_count_behavior, df_behavior_charts, show_behavior_charts
-from register_face_multi_images_avg import load_insightface_data
-from sklearn.metrics.pairwise import cosine_similarity
+import threading
+from collections import deque
 from PIL import Image
 from insightface.app import FaceAnalysis
 import warnings
 import hashlib
+from sklearn.metrics.pairwise import cosine_similarity
+
+from socket_video_stream import VideoStream  
+from control_database import insert_count_behavior, df_behavior_charts, show_behavior_charts
+from register_face_multi_images_avg import load_insightface_data
 from utils_criptografia import salvar_mapeamento
-from socket_video_stream import VideoStream  # cliente do relay via socket
-import threading
-from collections import deque
+
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -516,7 +518,7 @@ def recognition_behavior():
             messege.empty()
             stframe = st.empty()
 
-            fps_limit = 20
+            fps_limit = 18
             prev_time = 0.0
 
             video_stream = VideoStream(("172.16.5.158", 5555)).start()
