@@ -14,7 +14,7 @@ import streamlit as st
 import pandas as pd
 from datetime import timedelta
 import datetime
-from control_database import insert_count_behavior, df_behavior_charts, show_behavior_charts
+from control_database_postgres import insert_count_behavior, df_behavior_charts, show_behavior_charts
 from register_face_multi_images_avg import load_insightface_data
 from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image

@@ -1,10 +1,16 @@
 
 ########################### ATUALIZAÇÃO ###########################################
 
-import sqlite3
-import streamlit as st
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+try:
+    import sqlite3
+except Exception:
+    sqlite3 = None
+
+try:
+    import streamlit as st
+except Exception:
+    st = None
+## Imports de visualização movidos para dentro das funções
 from contextlib import contextmanager
 import pandas as pd
 import datetime
@@ -16,10 +22,7 @@ import os
 
 
 import io
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from PIL import Image
-import tempfile
+## Imports de PDF/imagem movidos para dentro das funções
 
 
 import os  # se ainda não tiver
@@ -35,47 +38,109 @@ DB_DIR = os.path.join(BASE_DIR, "..", "model")
 os.makedirs(DB_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(DB_DIR, "behavior_data.db")
-DATABASE_URI = f"sqlite:///{DB_PATH}"
 
-engine = create_engine(DATABASE_URI)
+# Se variáveis de ambiente estiverem configuradas, usar PostgreSQL; caso contrário
+# permanecer compatível com SQLite local. A migração já cria `control_database_postgres.py`,
+# mas aqui oferecemos compatibilidade por ambiente.
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+
+if all([DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD]):
+    DATABASE_URI = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+else:
+    DATABASE_URI = f"sqlite:///{DB_PATH}"
+
+engine = create_engine(DATABASE_URI, pool_pre_ping=True)
 
 #-------------------------------------------------------------------------------------------------------------------------------------------------
 @contextmanager
 def connect_database():
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        cursor = conn.cursor()
+    """Context manager para conectar ao banco configurado (SQLite ou PostgreSQL).
 
-        # Criar a tabela 'behavior_log'
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS behavior_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            school TEXT,
-            discipline TEXT,
-            teacher TEXT,
-            student TEXT,
-            id_student TEXT,
-            behavior TEXT,
-            count INTEGER DEFAULT 0,
-            date TEXT,
-            start_time TEXT,
-            end_time TEXT,
-            UNIQUE(student, behavior, date)
-        )
-        ''')
+    Retorna uma tupla (connection, cursor) compatível com o código atual que usa
+    operações SQL e pandas.read_sql_query.
+    """
+    # Se estiver usando SQLite, mantenha a compatibilidade com sqlite3
+    if DATABASE_URI.startswith("sqlite:"):
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cursor = conn.cursor()
 
-        # Criar a tabela 'students'
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS students (
-            id TEXT PRIMARY KEY,
-            name TEXT
-        )
-        ''')
+            # Criar a tabela 'behavior_log' caso não exista (compatível com SQLite)
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS behavior_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                school TEXT,
+                discipline TEXT,
+                teacher TEXT,
+                student TEXT,
+                id_student TEXT,
+                behavior TEXT,
+                count INTEGER DEFAULT 0,
+                date TEXT,
+                start_time TEXT,
+                end_time TEXT,
+                UNIQUE(student, behavior, date)
+            )
+            ''')
 
-        conn.commit()
-        yield conn, cursor
-    finally:
-        conn.close()
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS students (
+                id TEXT PRIMARY KEY,
+                name TEXT
+            )
+            ''')
+
+            conn.commit()
+            yield conn, cursor
+        finally:
+            conn.close()
+    else:
+        # PostgreSQL: usar SQLAlchemy engine
+        with engine.connect() as conn:
+            # O objeto `conn` do SQLAlchemy tem execute e pode ser usado pelo pandas
+            # Garantir que as tabelas existam
+            conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS behavior_log (
+                id SERIAL PRIMARY KEY,
+                school VARCHAR(255),
+                discipline VARCHAR(255),
+                teacher VARCHAR(255),
+                student VARCHAR(255),
+                id_student VARCHAR(255),
+                behavior VARCHAR(100),
+                count INTEGER DEFAULT 0,
+                date VARCHAR(10),
+                start_time VARCHAR(8),
+                end_time VARCHAR(8),
+                CONSTRAINT uq_behavior_log UNIQUE(student, behavior, date)
+            )
+            '''))
+
+            conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS students (
+                id VARCHAR(255) PRIMARY KEY,
+                name VARCHAR(255)
+            )
+            '''))
+            # Obter um cursor compatível com cursor.fetchall() usado em show_behavior_charts
+            raw_conn = conn.connection
+            # Commit via DBAPI connection
+            try:
+                raw_conn.commit()
+            except Exception:
+                pass
+            cursor = raw_conn.cursor()
+            try:
+                yield raw_conn, cursor
+            finally:
+                try:
+                    cursor.close()
+                except:
+                    pass
     
 
 
@@ -83,30 +148,58 @@ def connect_database():
 def insert_count_behavior(school, discipline, teacher, id_student, student, behavior, date, start_time, end_time, last_behavior=None):
     start_time = start_time or datetime.datetime.now().strftime("%H:%M:%S")
     end_time = end_time or datetime.datetime.now().strftime("%H:%M:%S")
-
     with connect_database() as (conn, cursor):
+        # Detectar se estamos em SQLite (sqlite3 Cursor) ou PostgreSQL (psycopg2 cursor)
+        is_sqlite = sqlite3 is not None and isinstance(cursor, sqlite3.Cursor)
+
         if last_behavior is None or last_behavior != behavior:
             if last_behavior is not None:
+                if is_sqlite:
+                    cursor.execute('''
+                    UPDATE behavior_log
+                    SET end_time = ?
+                    WHERE id_student = ? AND student = ? AND behavior = ? AND school = ? AND discipline = ? AND teacher = ?
+                    ''', (end_time, id_student, student, last_behavior, school, discipline, teacher))
+                else:
+                    cursor.execute('''
+                    UPDATE behavior_log
+                    SET end_time = %s
+                    WHERE id_student = %s AND student = %s AND behavior = %s AND school = %s AND discipline = %s AND teacher = %s
+                    ''', (end_time, id_student, student, last_behavior, school, discipline, teacher))
+                conn.commit()
+
+            # Upsert (compatível com SQLite e PostgreSQL)
+            if is_sqlite:
+                cursor.execute('''
+                INSERT INTO behavior_log (school, discipline, teacher, id_student, student, behavior, count, date, start_time, end_time)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(student, behavior, date) DO UPDATE SET
+                count = count + 1, start_time = COALESCE(start_time, ?), end_time = ?
+                ''', (school, discipline, teacher, id_student, student, behavior, date, start_time, end_time, start_time, end_time))
+            else:
+                cursor.execute('''
+                INSERT INTO behavior_log (school, discipline, teacher, id_student, student, behavior, count, date, start_time, end_time)
+                VALUES (%s, %s, %s, %s, %s, %s, 1, %s, %s, %s)
+                ON CONFLICT (student, behavior, date) 
+                DO UPDATE SET
+                    count = behavior_log.count + 1,
+                    start_time = COALESCE(behavior_log.start_time, EXCLUDED.start_time),
+                    end_time = EXCLUDED.end_time
+                ''', (school, discipline, teacher, id_student, student, behavior, date, start_time, end_time))
+            conn.commit()
+        else:
+            if is_sqlite:
                 cursor.execute('''
                 UPDATE behavior_log
                 SET end_time = ?
                 WHERE id_student = ? AND student = ? AND behavior = ? AND school = ? AND discipline = ? AND teacher = ?
-                ''', (end_time, id_student, student, last_behavior, school, discipline, teacher))
-                conn.commit()
-
-            cursor.execute('''
-            INSERT INTO behavior_log (school, discipline, teacher, id_student, student, behavior, count, date, start_time, end_time)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-            ON CONFLICT(student, behavior, date) DO UPDATE SET
-            count = count + 1, start_time = COALESCE(start_time, ?), end_time = ?
-            ''', (school, discipline, teacher, id_student, student, behavior, date, start_time, end_time, start_time, end_time))
-            conn.commit()
-        else:
-            cursor.execute('''
-            UPDATE behavior_log
-            SET end_time = ?
-            WHERE id_student = ? AND student = ? AND behavior = ? AND school = ? AND discipline = ? AND teacher = ?
-            ''', (end_time, id_student, student, behavior, school, discipline, teacher))
+                ''', (end_time, id_student, student, behavior, school, discipline, teacher))
+            else:
+                cursor.execute('''
+                UPDATE behavior_log
+                SET end_time = %s
+                WHERE id_student = %s AND student = %s AND behavior = %s AND school = %s AND discipline = %s AND teacher = %s
+                ''', (end_time, id_student, student, behavior, school, discipline, teacher))
             conn.commit()
 
     return behavior
@@ -118,7 +211,13 @@ def df_behavior_charts():
     FROM behavior_log
     """
     with connect_database() as (conn, cursor):
-        df = pd.read_sql_query(query, conn)
+        # conn pode ser sqlite3.Connection ou SQLAlchemy Connection; pandas aceita ambos,
+        # porém para SQLAlchemy devemos passar a engine or connection
+        try:
+            df = pd.read_sql_query(query, conn)
+        except Exception:
+            # Caso conn seja um SQLAlchemy Connection, usar engine
+            df = pd.read_sql_query(query, engine)
 
     if df.empty:
         df = pd.DataFrame(columns=[
@@ -141,50 +240,92 @@ def df_behavior_charts():
 
     return df
 
-#-------------------------------- Gráficos com nome somente o primeiro nome do aluno ----------------------------------------
 def show_behavior_charts():
-    conn = sqlite3.connect(DB_PATH)
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    import plotly.express as px
+    import plotly.graph_objects as go
+    import io
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from PIL import Image
+    import tempfile
     st.sidebar.header("Filtros")
 
-    students = pd.read_sql_query("SELECT DISTINCT student FROM behavior_log", conn)['student'].tolist()
-    selected_student = st.sidebar.selectbox("Selecione um aluno", students, index=0)
+    with connect_database() as (conn, cursor):
+        is_sqlite = sqlite3 is not None and isinstance(cursor, sqlite3.Cursor)
+        if is_sqlite:
+            students = pd.read_sql_query("SELECT DISTINCT student FROM behavior_log", conn)['student'].tolist()
+            disciplines = pd.read_sql_query("SELECT DISTINCT discipline FROM behavior_log", conn)['discipline'].tolist()
+        else:
+            students = pd.read_sql_query("SELECT DISTINCT student FROM behavior_log", engine)['student'].tolist()
+            disciplines = pd.read_sql_query("SELECT DISTINCT discipline FROM behavior_log", engine)['discipline'].tolist()
 
-    disciplines = pd.read_sql_query("SELECT DISTINCT discipline FROM behavior_log", conn)['discipline'].tolist()
+    selected_student = st.sidebar.selectbox("Selecione um aluno", students, index=0)
     selected_discipline = st.sidebar.selectbox("Selecione a Disciplina", disciplines, index=0)
 
     selected_date = st.sidebar.date_input("Selecione a Data", value=datetime.datetime.today().date())
     selected_date = selected_date.strftime("%Y-%m-%d")
     data_formatada = datetime.datetime.strptime(selected_date, "%Y-%m-%d").strftime("%d/%m/%y")
 
-    query_check_date = f'''
-        SELECT COUNT(*) FROM behavior_log
-        WHERE student = "{selected_student}" AND discipline = "{selected_discipline}" AND date = "{selected_date}"
-    '''
-    cursor = conn.cursor()
-    cursor.execute(query_check_date)
-    data_count = cursor.fetchone()[0]
+    # Checar existência de dados usando conexão compatível
+    with connect_database() as (conn, cursor):
+        is_sqlite = sqlite3 is not None and isinstance(cursor, sqlite3.Cursor)
+        if is_sqlite:
+            query_check_date = f'''
+                SELECT COUNT(*) FROM behavior_log
+                WHERE student = ? AND discipline = ? AND date = ?
+            '''
+            cursor.execute(query_check_date, (selected_student, selected_discipline, selected_date))
+            data_count = cursor.fetchone()[0]
+        else:
+            cursor.execute('''
+                SELECT COUNT(*) FROM behavior_log
+                WHERE student = %s AND discipline = %s AND date = %s
+            ''', (selected_student, selected_discipline, selected_date))
+            data_count = cursor.fetchone()[0]
 
     if data_count == 0:
         st.warning("Nenhum dado registrado para a data e disciplina selecionadas.")
         conn.close()
         return
 
-    query_behavior = f'''
-        SELECT behavior, SUM(count) as total_count
-        FROM behavior_log
-        WHERE student = "{selected_student}" AND discipline = "{selected_discipline}" AND date = "{selected_date}"
-        GROUP BY behavior
-    '''
-    df_behavior = pd.read_sql_query(query_behavior, conn)
+    # Consulta de comportamento
+    if is_sqlite:
+        query_behavior = f'''
+            SELECT behavior, SUM(count) as total_count
+            FROM behavior_log
+            WHERE student = ? AND discipline = ? AND date = ?
+            GROUP BY behavior
+        '''
+        df_behavior = pd.read_sql_query(query_behavior, conn, params=(selected_student, selected_discipline, selected_date))
+    else:
+        query_behavior = f'''
+            SELECT behavior, SUM(count) as total_count
+            FROM behavior_log
+            WHERE student = %s AND discipline = %s AND date = %s
+            GROUP BY behavior
+        '''
+        df_behavior = pd.read_sql_query(query_behavior, engine, params=(selected_student, selected_discipline, selected_date))
 
-    query_temporal = f'''
-        SELECT behavior, start_time, end_time, SUM(count) as total_count
-        FROM behavior_log
-        WHERE student = "{selected_student}" AND discipline = "{selected_discipline}" AND date = "{selected_date}"
-        GROUP BY behavior, start_time, end_time
-        ORDER BY start_time
-    '''
-    df_temporal = pd.read_sql_query(query_temporal, conn)
+    if is_sqlite:
+        query_temporal = f'''
+            SELECT behavior, start_time, end_time, SUM(count) as total_count
+            FROM behavior_log
+            WHERE student = ? AND discipline = ? AND date = ?
+            GROUP BY behavior, start_time, end_time
+            ORDER BY start_time
+        '''
+        df_temporal = pd.read_sql_query(query_temporal, conn, params=(selected_student, selected_discipline, selected_date))
+    else:
+        query_temporal = f'''
+            SELECT behavior, start_time, end_time, SUM(count) as total_count
+            FROM behavior_log
+            WHERE student = %s AND discipline = %s AND date = %s
+            GROUP BY behavior, start_time, end_time
+            ORDER BY start_time
+        '''
+        df_temporal = pd.read_sql_query(query_temporal, engine, params=(selected_student, selected_discipline, selected_date))
     conn.close()
 
     if df_behavior.empty or df_temporal.empty:
@@ -274,16 +415,6 @@ def show_behavior_charts():
         template="plotly_white"
     )
 
-    # col_g1, col_g2, col_g3 = st.columns([2, 1, 2])
-    # with col_g1:
-    #     st.plotly_chart(fig_pie, use_container_width=True)
-    # with col_g3:
-    #     st.plotly_chart(fig_bar, use_container_width=True)
-
-    # st.plotly_chart(fig_line, use_container_width=True)
-
-    # ----------------- Download de Gráficos -------------------
-
     def gerar_download_plotly(fig, nome_arquivo):
         buf = io.BytesIO()
         fig.write_image(buf, format='png')
@@ -296,7 +427,6 @@ def show_behavior_charts():
         )
         return buf
 
-    # Exibição dos gráficos com botões PNG
     col_g1, col_g2, col_g3 = st.columns([2, 0.2, 2])
     with col_g1:
         st.plotly_chart(fig_pie, use_container_width=True)
@@ -309,7 +439,6 @@ def show_behavior_charts():
     st.plotly_chart(fig_line, use_container_width=True)
     line_buf = gerar_download_plotly(fig_line, f"evolucao_temporal_{selected_student}_{data_formatada}")
 
-    # ----------------- PDF Único com os três gráficos -------------------
     pdf_buf = io.BytesIO()
     c = canvas.Canvas(pdf_buf, pagesize=A4)
 
@@ -326,7 +455,6 @@ def show_behavior_charts():
         c.drawImage(temp_image_path, 40, 100, width=500, preserveAspectRatio=True, mask='auto')
         c.showPage()
         os.unlink(temp_image_path)
-
 
     adicionar_pagina_pdf(pie_buf, "Distribuição de Comportamentos")
     adicionar_pagina_pdf(bar_buf, "Contagem de Comportamentos")
@@ -350,10 +478,10 @@ def user_table():
             'users', metadata,
             Column('id', Integer, primary_key=True, autoincrement=True),
             Column('cpf', String(11), unique=True, nullable=False),
-            Column('nome', String, nullable=False),
+            Column('nome', String(255), nullable=False),
             Column('password', String, nullable=False),
             Column('cidade', String, nullable=False),
-            Column('estado', String, nullable=False),
+            Column('estado', String(2), nullable=False),
             UniqueConstraint('cpf', name='uix_1')
         )
         metadata.create_all(engine)

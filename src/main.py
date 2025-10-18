@@ -4,7 +4,7 @@ from streamlit_option_menu import option_menu
 import pandas as pd
 import bcrypt
 from sqlalchemy import text
-from control_database import engine, registrar_usuario, user_table
+from control_database_postgres import engine, registrar_usuario, user_table
 from streamlit_cookies_controller import CookieController
 from insightface_classroom import recognition_behavior
 from register_face_multi_images_avg import register_faces
@@ -77,7 +77,25 @@ def login():
 
                         if result:
                             stored_nome, stored_cpf, stored_password, stored_city, stored_state = result
-                            if bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8')):
+
+                            try:
+                                password_matches = bcrypt.checkpw(
+                                    password.encode('utf-8'),
+                                    stored_password.encode('utf-8')
+                                )
+                            except ValueError:
+                                password_matches = stored_password == password
+                                if password_matches:
+                                    new_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
+                                    update_query = text("""
+                                        UPDATE users
+                                        SET password = :password
+                                        WHERE cpf = :cpf
+                                    """)
+                                    conn.execute(update_query, {"password": new_hash, "cpf": stored_cpf})
+                                    conn.commit()
+
+                            if password_matches:
                                 st.session_state['authenticated'] = True
                                 st.session_state['name'] = stored_nome
                                 st.session_state['cpf'] = stored_cpf
