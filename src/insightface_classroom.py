@@ -781,3 +781,4 @@ def recognition_behavior():
             st.warning("Nenhum dado encontrado para os filtros selecionados.")
         else:
             st.dataframe(filtered_df, use_container_width=True)
+            
