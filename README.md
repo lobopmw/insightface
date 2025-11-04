@@ -19,6 +19,22 @@ pip install streamlit ultralytics opencv-python numpy torch torchvision torchaud
 ```
 > Use **onnxruntime-gpu** se tiver CUDA. Senão, deixe só **onnxruntime**.
 
+## 🐳 Executando com Docker
+
+1. Copie `.env.example` para `.env` e ajuste a variável `RTSP_URL` com a URL da câmera (formato `rtsp://usuario:senha@IP:554/...`).  
+2. Construa e suba os serviços do app e do relay:
+   ```bash
+   docker compose up --build -d relay app
+   ```
+   - O serviço `relay` executa `python src/relay_rtsp_server.py` com os parâmetros configurados em `.env`.
+   - O Streamlit (`app`) já aponta para o host `relay` na porta definida em `RELAY_PORT`.
+3. Acompanhe os logs conforme necessário:
+   ```bash
+   docker compose logs -f relay
+   docker compose logs -f app
+   ```
+4. Ajuste `RELAY_QUALITY`, `RELAY_SEND_FPS` ou `RELAY_PORT` no `.env` conforme a sua rede/dispositivo.
+
 ## 📁 Estrutura recomendada de pastas
 
 ```
@@ -27,7 +43,7 @@ project/
 ├─ src/
 │   ├─ insightface_classroom.py        # app Streamlit (principal)
 │   ├─ socket_video_stream.py          # cliente do relay (VideoStream)
-│   ├─ server_rtsp_socket.py           # servidor relay RTSP → socket (exemplo)
+│   ├─ relay_rtsp_server.py            # servidor relay RTSP → socket
 │   ├─ register_face_multi_images_avg.py
 │   ├─ control_database.py             # DB e gráficos
 │   ├─ utils_criptografia.py           # salvar_mapeamento (hash)
@@ -67,10 +83,11 @@ ffplay -rtsp_transport tcp "rtsp://usuario:senha@IP:554/Streaming/Channels/101"
 No terminal A:
 ```bash
 cd src
-python server_rtsp_socket.py   --rtsp "rtsp://usuario:senha@IP_DA_CAMERA:554/Streaming/Channels/101"   --host 0.0.0.0   --port 5555   --send-fps 15   --resize 1280x720
+python relay_rtsp_server.py "rtsp://usuario:senha@IP_DA_CAMERA:554/Streaming/Channels/101" --host 0.0.0.0 --port 5555 --quality 85 --send-fps 15
 ```
 - **--send-fps**: taxa de quadros enviada ao cliente  
-- **--resize**: opcional (diminui resolução pra reduzir latência/CPU)
+- **--quality**: qualidade do JPEG (50–95)  
+- **--width/--height**: opcionais para forçar resolução de captura  
 - **host/port**: mantenha coerente com o cliente (**127.0.0.1:5555** por padrão)
 
 > Dica: para **menos delay**, use o **substream** da câmera (ex.: *Channels/102*), GOP curto (I-frame mais frequente), bitrate CBR moderado, desative “smart codecs”.
@@ -156,7 +173,7 @@ As mudanças de comportamento são enviadas para o banco via `insert_count_behav
 
 - **Sem vídeo no monitoramento**  
   - Verifique o log do **servidor relay**  
-  - IP/porta corretos? (app usa `("127.0.0.1", 5555)`)  
+  - IP/porta corretos? (o app usa `RELAY_HOST`/`RELAY_PORT`, padrão `relay:5555`)  
   - Firewall liberado?
 - **Muito delay**  
   - Reduza `--resize` ou `--send-fps` no servidor  
@@ -181,7 +198,7 @@ As mudanças de comportamento são enviadas para o banco via `insert_count_behav
 
 ```bash
 # 1) Relay (servidor)
-python src/server_rtsp_socket.py --rtsp "rtsp://user:pass@CAM_IP:554/Streaming/Channels/101"   --host 0.0.0.0 --port 5555 --send-fps 15 --resize 1280x720
+python src/relay_rtsp_server.py "rtsp://user:pass@CAM_IP:554/Streaming/Channels/101" --host 0.0.0.0 --port 5555 --quality 85 --send-fps 15
 
 # 2) App
 streamlit run src/insightface_classroom.py
@@ -193,6 +210,7 @@ python src/register_face_multi_images_avg.py
 ## ✍️ Dicas finais
 
 - Para evitar “rerun” com streams abertos, sempre **pare o monitoramento** antes de mexer em opções/voltar pro cadastro.
-- Se trocar **host/porta** do relay, atualize no `VideoStream(("HOST", PORTA))`.
+- Ajuste **host/porta** do relay via variáveis de ambiente (`RELAY_HOST`, `RELAY_PORT`) quando rodar o app manualmente.
 - Se precisar mudar caminhos, ajuste no início do app:
   - `DATA_DIR`, `DATABASE_PATH`, `MAPPING_CSV`.
+  - `RELAY_HOST` e `RELAY_PORT` podem ser definidos por variável de ambiente (no Docker, já vem de `.env`).

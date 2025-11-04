@@ -20,14 +20,44 @@ services:
     container_name: insightface_app
     depends_on:
       - db
+      - relay
     environment:
       DB_HOST: db
       DB_PORT: 5432
       DB_NAME: insightface_db
       DB_USER: insightface_user
       DB_PASSWORD: insightface_password
+      RELAY_HOST: relay
+      RELAY_PORT: ${RELAY_PORT:-5555}
     ports:
       - "8501:8501"
+    networks:
+      - insightface_network
+    volumes:
+      - .:/app
+
+  relay:
+    build: .
+    container_name: insightface_relay
+    command:
+      - python
+      - src/relay_rtsp_server.py
+      - ${RTSP_URL?Defina RTSP_URL no arquivo .env}
+      - --host
+      - 0.0.0.0
+      - --port
+      - ${RELAY_PORT:-5555}
+      - --quality
+      - ${RELAY_QUALITY:-85}
+      - --send-fps
+      - ${RELAY_SEND_FPS:-15}
+    environment:
+      RTSP_URL: ${RTSP_URL?Defina RTSP_URL no arquivo .env}
+      RELAY_PORT: ${RELAY_PORT:-5555}
+      RELAY_QUALITY: ${RELAY_QUALITY:-85}
+      RELAY_SEND_FPS: ${RELAY_SEND_FPS:-15}
+    ports:
+      - "${RELAY_PORT:-5555}:${RELAY_PORT:-5555}"
     networks:
       - insightface_network
     volumes:

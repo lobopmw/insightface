@@ -38,6 +38,9 @@ CAM_SETUP = 'LEFT'
 CAM_YAW_OFFSET = 12.0
 YAW_LATERAL_THRESH = 28.0
 
+RELAY_HOST = os.getenv("RELAY_HOST", "127.0.0.1")
+RELAY_PORT = int(os.getenv("RELAY_PORT", "5555"))
+
 
 # Paths
 DATA_DIR       = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
@@ -519,7 +522,7 @@ def recognition_behavior():
             fps_limit = 20
             prev_time = 0.0
 
-            video_stream = VideoStream(("172.16.5.158", 5555)).start()
+            video_stream = VideoStream((RELAY_HOST, RELAY_PORT)).start()
             st.session_state.video_stream = video_stream
 
             # flush rápido para pegar frame atual
