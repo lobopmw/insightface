@@ -19,6 +19,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from PIL import Image
 import tempfile
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configurações do banco de dados
 DB_HOST = os.getenv("DB_HOST", "localhost")

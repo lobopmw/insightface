@@ -21,7 +21,9 @@ pip install streamlit ultralytics opencv-python numpy torch torchvision torchaud
 
 ## 🐳 Executando com Docker
 
-1. Copie `.env.example` para `.env` e ajuste a variável `RTSP_URL` com a URL da câmera (formato `rtsp://usuario:senha@IP:554/...`).  
+1. Ajuste o arquivo `.env` com a URL RTSP da câmera (formato `rtsp://usuario:senha@IP:554/...`) e demais parâmetros conforme o seu ambiente.  
+   - Para execuções fora dos containers, mantenha `DB_HOST=localhost`.  
+   - O serviço `app` do Docker Compose já injeta `DB_HOST=db`, não sendo necessário alterar o `.env` para uso em produção com containers.  
 2. Construa e suba os serviços do app e do relay:
    ```bash
    docker compose up --build -d relay app
@@ -45,7 +47,7 @@ project/
 │   ├─ socket_video_stream.py          # cliente do relay (VideoStream)
 │   ├─ relay_rtsp_server.py            # servidor relay RTSP → socket
 │   ├─ register_face_multi_images_avg.py
-│   ├─ control_database.py             # DB e gráficos
+│   ├─ control_database_postgres.py    # DB e gráficos (PostgreSQL)
 │   ├─ utils_criptografia.py           # salvar_mapeamento (hash)
 │   └─ images/
 │       ├─ classroom1.jpg
@@ -63,11 +65,32 @@ project/
     │       └─ cabeca_baixa/
     ├─ embeddings.npy                  # gerado pelo script de registro
     └─ names.json / names.pkl          # gerado pelo script de registro
+
+legacy/
+└─ sqlite_migration/                   # scripts e guias da migração SQLite → PostgreSQL (arquivados)
 ```
 
 > **Importante:** O app já usa `data/` como raiz, com:
 > - `data/mapeamento_alunos.csv`
 > - `data/alunos/<hash>/...`
+
+### Recursos legados
+
+O conteúdo antigo relacionado à migração do SQLite (scripts, guias e banco `.db`) foi movido para `legacy/sqlite_migration/`. Use esses arquivos apenas se precisar repetir o processo de migração.
+
+### Inicialização do banco
+
+Antes de subir o Streamlit você pode garantir que o PostgreSQL esteja acessível e com as tabelas criadas:
+
+```bash
+# inicie o banco primeiro (em outro terminal)
+docker compose up -d db
+
+# depois verifique/crie as tabelas
+python src/init_db.py
+```
+
+O script `src/init_db.py` reaproveita o mesmo módulo da aplicação (`control_database_postgres.py`): ele cria/valida a tabela `users` e força a criação das tabelas `behavior_log`/`students`. Se preferir rodar tudo via Docker, utilize `docker compose run --rm app python src/init_db.py`.
 
 ## 🚀 Passo a passo (primeira execução)
 
@@ -186,7 +209,7 @@ As mudanças de comportamento são enviadas para o banco via `insert_count_behav
 - **Contagens não aparecem nos gráficos/tabela**  
   - Os gráficos filtram por **Aluno**, **Disciplina** e **Data** — confira se coincidem  
   - Confirme se `insert_count_behavior(...)` está sendo chamado (muda de estado)  
-  - Cheque a base/arquivo SQLite configurado em `control_database.py`
+  - Cheque a conexão PostgreSQL configurada em `control_database_postgres.py`
 
 ## 🔒 Observações de privacidade
 
