@@ -13,6 +13,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from pgvector.psycopg2 import register_vector
 
 import io
 from reportlab.pdfgen import canvas
@@ -53,9 +54,18 @@ def connect_database():
         user=DB_USER,
         password=DB_PASSWORD
     )
+    original_autocommit = conn.autocommit
     try:
+        try:
+            conn.autocommit = True
+            with conn.cursor() as _cursor:
+                _cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        finally:
+            conn.autocommit = original_autocommit
+
+        register_vector(conn)
         cursor = conn.cursor()
-        
+
         # Criar a tabela 'behavior_log' (PostgreSQL)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS behavior_log (
@@ -79,6 +89,16 @@ def connect_database():
         CREATE TABLE IF NOT EXISTS students (
             id VARCHAR(255) PRIMARY KEY,
             name VARCHAR(255)
+        )
+        ''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS face_embeddings (
+            student_hash VARCHAR(64) PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            matricula VARCHAR(255),
+            embedding vector(512) NOT NULL,
+            updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         ''')
 

@@ -77,6 +77,7 @@ smmap==5.0.2
 SQLAlchemy==2.0.41
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
+pgvector==0.2.5
 streamlit==1.46.1
 streamlit-cookies-controller==0.0.4
 streamlit-option-menu==0.4.0
