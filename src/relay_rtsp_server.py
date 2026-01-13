@@ -1,9 +1,3 @@
-# relay_rtsp_server.py
-# Servidor que lê RTSP (Hikvision) e envia SEMPRE o frame mais novo via TCP.
-# Agora envia SOMENTE quando chega um frame novo e pode limitar com --send-fps.
-# Uso:
-#   python relay_rtsp_server.py "rtsp://admin:admin123@172.16.5.250:554/Streaming/Channels/101" --host 0.0.0.0 --port 5555 --quality 85 --send-fps 15
-
 import os
 # Defina as opções ANTES do import cv2 (baixa latência no FFMPEG)
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)

@@ -1,0 +1,41 @@
+
+services:
+  db:
+    image: postgres:17
+    container_name: insightface_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: insightface_db
+      POSTGRES_USER: insightface_user
+      POSTGRES_PASSWORD: insightface_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - insightface_network
+
+  app:
+    build: .
+    container_name: insightface_app
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: insightface_db
+      DB_USER: insightface_user
+      DB_PASSWORD: insightface_password
+    ports:
+      - "8501:8501"
+    networks:
+      - insightface_network
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
+
+networks:
+  insightface_network:
+    driver: bridge
