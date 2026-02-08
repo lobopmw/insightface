@@ -3,12 +3,13 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 import pandas as pd
 import bcrypt
-from sqlalchemy import text
-from control_database import engine, registrar_usuario, user_table
-from streamlit_cookies_controller import CookieController
-from insightface_classroom import recognition_behavior
-from register_face_multi_images_avg import register_faces
 import os
+from sqlalchemy import text
+from streamlit_cookies_controller import CookieController
+
+from control_database import engine, registrar_usuario, user_table
+from insightface_classroom import recognition_behavior
+
 
 
 #-----------------------------------------------------------------------------------------------------------------------------------#

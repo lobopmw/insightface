@@ -1,4 +1,3 @@
-# socket_video_stream.py
 import socket, struct, threading, time
 import cv2, numpy as np
 
