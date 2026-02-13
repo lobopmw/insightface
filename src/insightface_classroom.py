@@ -14,7 +14,7 @@ import streamlit as st
 import pandas as pd
 from datetime import timedelta
 import datetime
-from control_database_postgres import insert_count_behavior, df_behavior_charts, show_behavior_charts
+from control_database_postgres import insert_behavior_episode, df_behavior_charts, show_behavior_charts
 from register_face_multi_images_avg import load_insightface_data
 from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image
@@ -25,6 +25,7 @@ from utils_criptografia import salvar_mapeamento
 from socket_video_stream import VideoStream  # cliente do relay via socket
 import threading
 from collections import deque
+from behavior_episode_service import BehaviorEpisodeManager
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -494,7 +495,12 @@ def recognition_behavior():
         stop_system = col2.button("Parar Monitoramento")
 
         model = YOLO('yolo11m-pose.pt')
-        behavior_tracker = {}
+        episode_manager = BehaviorEpisodeManager(
+            persist_callback=insert_behavior_episode,
+            stability_seconds=2.0,
+            stability_frames=15,
+        )
+        st.session_state["episode_manager"] = episode_manager
         BOX_MARGIN_RATIO = 0.2
 
         # FaceAnalysis
@@ -653,20 +659,20 @@ def recognition_behavior():
 
 
 
-                            # Registro no DB (transições)
-                            date = datetime.datetime.now().strftime("%Y-%m-%d")
-                            current_time = datetime.datetime.now().strftime("%H:%M:%S")
-
-                            if name_student not in behavior_tracker:
-                                behavior_tracker[name_student] = {"behavior": current_behavior, "start_time": current_time}
-
-                            if behavior_tracker[name_student]["behavior"] != current_behavior and name_student != "Desconhecido":
-                                insert_count_behavior(
-                                    school, discipline, user_name, '12345', name_student,
-                                    behavior_tracker[name_student]["behavior"], date,
-                                    behavior_tracker[name_student]["start_time"], current_time
+                            # Registro por episódios com debounce (sem gravar por frame)
+                            if name_student != "Desconhecido":
+                                now_dt = datetime.datetime.now()
+                                episode_manager.update_behavior(
+                                    student_key=name_student,
+                                    student_name=name_student,
+                                    student_id=None,
+                                    behavior=current_behavior,
+                                    timestamp=now_dt,
+                                    school=school,
+                                    discipline=discipline,
+                                    teacher=user_name,
+                                    source="realtime",
                                 )
-                                behavior_tracker[name_student] = {"behavior": current_behavior, "start_time": current_time}
 
                             # ------------------- Desenho da caixa/label (com cor por comportamento) -------------------
                             # BGR: vermelho (0,0,255) para Agitado/Dormindo; verde (0,255,0) para os demais
@@ -730,6 +736,14 @@ def recognition_behavior():
                 stframe.image(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
 
             # encerra ao sair
+            episode_manager.flush_all(
+                timestamp=datetime.datetime.now(),
+                school=school,
+                discipline=discipline,
+                teacher=user_name,
+                source="realtime",
+            )
+            st.session_state.pop("episode_manager", None)
             try: detector.stop()
             except: pass
             try: video_stream.stop()
@@ -738,6 +752,15 @@ def recognition_behavior():
                 del st.session_state['video_stream']
 
         if stop_system:
+            if "episode_manager" in st.session_state:
+                st.session_state["episode_manager"].flush_all(
+                    timestamp=datetime.datetime.now(),
+                    school=school,
+                    discipline=discipline,
+                    teacher=user_name,
+                    source="realtime",
+                )
+                st.session_state.pop("episode_manager", None)
             st.info("Monitoramento parado.")
             if 'video_stream' in st.session_state:
                 try: st.session_state.video_stream.stop()
