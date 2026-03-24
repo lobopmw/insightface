@@ -188,26 +188,32 @@ def cadastrar_usuario():
     st.subheader("➕ Cadastro de novo usuário")
 
     # Coleta de informações do novo usuário
-    cpf = st.text_input("CPF", max_chars=11, placeholder="Informe o CPF", label_visibility= "hidden")
-    name = st.text_input("Nome", placeholder="Informe seu nome completo", label_visibility= "hidden")
-    city = st.text_input("Cidade", placeholder="Informe sua cidade", label_visibility= "hidden")
-    state = st.selectbox("Estado", nomes_estados, label_visibility= "hidden")
-    password = st.text_input("Senha", type="password", placeholder="Senha", label_visibility= "hidden")
-    confirm_password = st.text_input("Confirmar Senha", type="password", placeholder="Confirmar senha", label_visibility= "hidden")
+    cpf = st.text_input("CPF", max_chars=11, placeholder="Informe o CPF", label_visibility="hidden")
+    name = st.text_input("Nome", placeholder="Informe seu nome completo", label_visibility="hidden")
+    city = st.text_input("Cidade", placeholder="Informe sua cidade", label_visibility="hidden")
+
+    estado_options = [f"{e['sigla']} - {e['nome']}" if e['sigla'] != 'BR' else 'BR - Informe o estado' for e in estados]
+    state_raw = st.selectbox("Estado", estado_options, label_visibility="hidden")
+    state = state_raw.split(" - ")[0] if " - " in state_raw else state_raw
+
+    password = st.text_input("Senha", type="password", placeholder="Senha", label_visibility="hidden")
+    confirm_password = st.text_input("Confirmar Senha", type="password", placeholder="Confirmar senha", label_visibility="hidden")
 
     if st.button("Registrar"):
         if validar_cpf(cpf):
             if password != confirm_password:
                 st.error("As senhas não coincidem!")
-            elif cpf and password and city and state and name:
-                hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
-                sucess = registrar_usuario(cpf,name, hashed_password, city, state)
-                if sucess:
-                    st.success(f"Usuário '{name}' cadastrado com sucesso!")
-                else:
-                    st.warning(f"CPF: {cpf} já está cadastrado com outro usuário!")
+            elif not cpf or not name or not city or not state or state == 'BR':
+                st.error("Todos os campos são obrigatórios e estado deve ser válido!")
             else:
-                st.error("Todos os campos são obrigatórios!")
+                hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
+                sucess = registrar_usuario(cpf, name, hashed_password, city, state)
+                if sucess == "ok":
+                    st.success(f"Usuário '{name}' cadastrado com sucesso!")
+                elif sucess == "cpf_exists":
+                    st.warning(f"CPF: {cpf} já está cadastrado com outro usuário!")
+                else:
+                    st.error("Erro ao cadastrar usuário. Verifique a conexão com o banco de dados e os logs.")
         else:
             st.warning("CPF inválido!")
        
@@ -263,17 +269,17 @@ def main():
                 elif st.session_state["selected_option"] == "Cadastrar":
                     cadastrar_usuario()
 
-                # # Mostrar o rádio abaixo do formulário
-                # radio1, radio2, radio3 = st.columns([3,2,3])
-                # with radio2:
-                #     st.radio(
-                #         "Selecione uma opção:",
-                #         ["Login", "Cadastrar"],
-                #         index=["Login", "Cadastrar"].index(st.session_state["selected_option"]),
-                #         key="selected_option",
-                #         horizontal=True,
-                #         label_visibility="hidden"
-                #     )
+                # Mostrar o rádio abaixo do formulário
+                radio1, radio2, radio3 = st.columns([3,2,3])
+                with radio2:
+                    st.radio(
+                        "Selecione uma opção:",
+                        ["Login", "Cadastrar"],
+                        index=["Login", "Cadastrar"].index(st.session_state["selected_option"]),
+                        key="selected_option",
+                        horizontal=True,
+                        label_visibility="hidden"
+                    )
 
                 
 

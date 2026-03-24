@@ -56,6 +56,11 @@ Observação importante:
 docker compose up --build -d db relay app
 ```
 
+Para habilitar GPU NVIDIA quando o host estiver configurado com o runtime/container toolkit:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d db relay app
+```
+
 ### 4.3 Verifique logs
 ```bash
 docker compose logs -f db

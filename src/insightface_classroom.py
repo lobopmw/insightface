@@ -277,6 +277,9 @@ def recognition_behavior():
     st.sidebar.markdown(f"**{user_name}**")
 
     if st.sidebar.button("Sair"):
+        for key in ("authenticated", "cpf", "name", "city", "state"):
+            if key in st.query_params:
+                del st.query_params[key]
         st.session_state.clear()
         st.rerun()
 
