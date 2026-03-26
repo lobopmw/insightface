@@ -1,5 +1,6 @@
 
 import os
+import base64
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
     "rtsp_transport;tcp|fflags;nobuffer|max_delay;0|buffer_size;1024"
@@ -92,6 +93,270 @@ def get_runtime_diagnostics():
         diagnostics["onnxruntime_providers"] = [f"erro: {exc}"]
 
     return diagnostics
+
+
+@st.cache_resource(show_spinner=False)
+def build_monitor_runtime(device: str, relay_host: str, relay_port: int):
+    model = YOLO('yolo11m-pose.pt')
+
+    if device == "cuda":
+        model_face = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider","CPUExecutionProvider"])
+        model_face.prepare(ctx_id=0, det_size=(832,832))
+    else:
+        model_face = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+        model_face.prepare(ctx_id=-1, det_size=(832,832))
+
+    known_face_encodings, known_face_names = load_insightface_data()
+    known_face_encodings_norm = (
+        known_face_encodings / (np.linalg.norm(known_face_encodings, axis=1, keepdims=True) + 1e-6)
+    ) if len(known_face_encodings) > 0 else None
+
+    video_stream = VideoStream((relay_host, relay_port)).start()
+    detector = DetectorWorker(model, model_face, device).start()
+
+    return {
+        "model": model,
+        "model_face": model_face,
+        "known_face_encodings_norm": known_face_encodings_norm,
+        "known_face_names": known_face_names,
+        "video_stream": video_stream,
+        "detector": detector,
+    }
+
+
+def teardown_monitor_runtime():
+    runtime = st.session_state.pop("monitor_runtime", None)
+    if isinstance(runtime, dict):
+        detector = runtime.get("detector")
+        video_stream = runtime.get("video_stream")
+        if detector is not None:
+            try:
+                detector.stop()
+            except Exception:
+                pass
+        if video_stream is not None:
+            try:
+                video_stream.stop()
+            except Exception:
+                pass
+    build_monitor_runtime.clear()
+
+
+@st.fragment(run_every=0.1)
+def render_monitor_fragment(
+    school: str,
+    discipline: str,
+    user_name: str,
+    confidence_threshold: float,
+    show_debug: bool,
+    debug_font: float,
+    box_margin_ratio: float,
+):
+    stframe = st.empty()
+    status_placeholder = st.empty()
+    runtime = st.session_state.get("monitor_runtime")
+    video_stream = None if runtime is None else runtime.get("video_stream")
+    detector = None if runtime is None else runtime.get("detector")
+    episode_manager = st.session_state.get("episode_manager")
+    known_face_encodings_norm = None if runtime is None else runtime.get("known_face_encodings_norm")
+    known_face_names = [] if runtime is None else runtime.get("known_face_names", [])
+
+    frame = None if video_stream is None else video_stream.read()
+    if frame is None:
+        status = video_stream.get_status() if video_stream is not None else {
+            "server": (RELAY_HOST, RELAY_PORT),
+            "connected": False,
+            "frames_received": 0,
+            "last_frame_at": None,
+            "last_error": "video_stream ausente",
+        }
+        waited = time.time() - st.session_state.get("monitor_waiting_since", time.time())
+        last_frame_age = None
+        if status["last_frame_at"] is not None:
+            last_frame_age = time.time() - status["last_frame_at"]
+
+        status_placeholder.warning(
+            "\n".join(
+                [
+                    f"Aguardando frames do relay `{status['server'][0]}:{status['server'][1]}`",
+                    f"Conectado: {'sim' if status['connected'] else 'nao'}",
+                    f"Frames recebidos: {status['frames_received']}",
+                    f"Ultimo frame ha: {f'{last_frame_age:.1f}s' if last_frame_age is not None else 'nenhum'}",
+                    f"Ultimo erro: {status['last_error'] or 'nenhum'}",
+                ]
+            )
+        )
+        if waited > 10:
+            status_placeholder.error(
+                "O app conectou no relay, mas nao recebeu frame util a tempo. "
+                "Valide os logs do container `relay` e a estabilidade do RTSP."
+            )
+        return
+
+    st.session_state["monitor_waiting_since"] = time.time()
+    status_placeholder.empty()
+
+    detector.update_frame(frame)
+    results, faces = detector.get_outputs()
+
+    face_named = []
+    if faces:
+        for face in faces:
+            fx1, fy1, fx2, fy2 = face.bbox.astype(int)
+            name_face = "Desconhecido"
+            if known_face_encodings_norm is not None:
+                emb = face.embedding
+                emb = emb / (np.linalg.norm(emb) + 1e-6)
+                sims = cosine_similarity([emb], known_face_encodings_norm)[0]
+                best_idx = int(np.argmax(sims))
+                if float(sims[best_idx]) > 0.45:
+                    name_face = known_face_names[best_idx]
+            face_named.append(((fx1, fy1, fx2, fy2), name_face))
+            if name_face != "Desconhecido":
+                remember_name((fx1, fy1, fx2, fy2), name_face)
+
+    if results:
+        for result in results:
+            if not hasattr(result, 'keypoints') or len(result.keypoints) == 0:
+                continue
+            keypoints_all = result.keypoints.data.cpu().numpy()
+            hud_lines = []
+
+            for pid, person_keypoints in enumerate(keypoints_all):
+                if len(person_keypoints) == 0:
+                    continue
+
+                current_behavior = "Atento"
+                have_all = False
+
+                if person_keypoints.shape[0] > 10:
+                    nose = person_keypoints[0]
+                    ls, rs = person_keypoints[5], person_keypoints[6]
+                    le, re = person_keypoints[7], person_keypoints[8]
+                    lw, rw = person_keypoints[9], person_keypoints[10]
+
+                    confs = [p[2] for p in [nose, ls, rs, le, re, lw, rw]]
+                    have_all = all(c > confidence_threshold for c in confs)
+                    if have_all:
+                        current_behavior = classify_behavior(nose, ls, rs, le, re, lw, rw, confidence_threshold)
+
+                x_coords = [p[0] for p in person_keypoints if p[2] > confidence_threshold]
+                y_coords = [p[1] for p in person_keypoints if p[2] > confidence_threshold]
+                if not x_coords or not y_coords:
+                    continue
+                x_min, x_max = int(min(x_coords)), int(max(x_coords))
+                y_min, y_max = int(min(y_coords)), int(max(y_coords))
+                y_min = max(0, int(y_min - box_margin_ratio * (y_max - y_min)))
+                person_box = (x_min, y_min, x_max, y_max)
+
+                best_i, name_student = 0.0, "Desconhecido"
+                for (fb, nm) in face_named:
+                    i = iou(person_box, fb)
+                    if i > best_i:
+                        best_i, name_student = i, nm
+                if best_i < 0.10:
+                    name_student = resolve_name(person_box)
+
+                if name_student != "Desconhecido" and person_keypoints.shape[0] > 10:
+                    nose = person_keypoints[0]
+                    l_eye = person_keypoints[1]
+                    r_eye = person_keypoints[2]
+                    l_ear = person_keypoints[3]
+                    r_ear = person_keypoints[4]
+                    ls = person_keypoints[5]
+                    rs = person_keypoints[6]
+
+                    if nose[2] > confidence_threshold:
+                        lateral_status = is_lateral_view(
+                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=confidence_threshold
+                        )
+                        new_behavior = check_distracted_status(
+                            name_student, lateral_status, lateral_timers, timeout=10
+                        )
+                        if new_behavior:
+                            current_behavior = new_behavior
+
+                    raw_behavior = current_behavior
+                    key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
+                    state = sleep_smoother.setdefault(key, {"state":"Atento","sleep":0,"awake":0})
+
+                    if raw_behavior == "Dormindo":
+                        state["sleep"] += 1
+                        state["awake"] = 0
+                        if state["state"] != "Dormindo" and state["sleep"] >= ENTER_SLEEP_FRAMES:
+                            state["state"] = "Dormindo"
+                    else:
+                        state["awake"] += 1
+                        state["sleep"] = 0
+                        if state["state"] == "Dormindo" and state["awake"] >= EXIT_SLEEP_FRAMES:
+                            state["state"] = raw_behavior
+                        elif state["state"] != "Dormindo":
+                            state["state"] = raw_behavior
+
+                    current_behavior = state["state"]
+
+                if name_student != "Desconhecido" and episode_manager is not None:
+                    now_dt = datetime.datetime.now()
+                    episode_manager.update_behavior(
+                        student_key=name_student,
+                        student_name=name_student,
+                        student_id=None,
+                        behavior=current_behavior,
+                        timestamp=now_dt,
+                        school=school,
+                        discipline=discipline,
+                        teacher=user_name,
+                        source="realtime",
+                    )
+
+                box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
+                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
+                label_text = f"{name_student} - {current_behavior}"
+
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                scale = 0.6
+                thickness = 2
+                pad_x, pad_y = 6, 4
+                (text_w, text_h), _ = cv2.getTextSize(label_text, font, scale, thickness)
+
+                tx = int(x_min)
+                ty = int(y_min)
+                top = ty - text_h - 2 * pad_y
+                if top < 0:
+                    top = ty
+
+                cv2.rectangle(frame, (tx, top), (tx + text_w + 2 * pad_x, top + text_h + 2 * pad_y), box_color, -1)
+                cv2.putText(frame, label_text, (tx + pad_x, top + text_h + pad_y - 1), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+                if show_debug and have_all:
+                    shoulder_y = (ls[1] + rs[1]) / 2.0
+                    s = max(1.0, abs(ls[0] - rs[0]))
+                    best_vert_dist = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
+                    near_thr = max(10.0, 0.32 * s)
+
+                    hud_lines = [
+                        f"s (ombro a ombro): {s:.1f}",
+                        f"near_thr: {near_thr:.1f}",
+                        f"shoulder_y: {shoulder_y:.1f}",
+                        f"nose_y: {nose[1]:.1f}",
+                        f"best_vert_dist: {best_vert_dist:.1f}",
+                    ]
+                    y0 = 24
+                    for i, text in enumerate(hud_lines):
+                        cv2.putText(frame, text, (10, y0 + int(i * 22 * debug_font)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, debug_font, (255, 255, 0), 2)
+
+    disp = cv2.resize(frame, (960, 540))
+    ok, jpg = cv2.imencode(".jpg", disp, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if ok:
+        b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+        stframe.markdown(
+            (
+                '<img src="data:image/jpeg;base64,'
+                f'{b64}" style="width:100%;height:auto;display:block;border-radius:8px;" />'
+            ),
+            unsafe_allow_html=True,
+        )
 
 # ---------------- Associação por IoU + memória curta de nome ----------------
 def iou(a, b):
@@ -309,7 +574,7 @@ def recognition_behavior():
     school = "Escola Estadual Criança Esperança"
     discipline = "Matemática"
 
-    st.sidebar.image(image_path_classroom, use_container_width=True)
+    st.sidebar.image(image_path_classroom, width="stretch")
     user_name = st.session_state.get("name", "Usuário")
     st.sidebar.markdown(f"**{user_name}**")
 
@@ -512,12 +777,6 @@ def recognition_behavior():
             except: pass
             del st.session_state['cadastro_cap']
 
-        # Fecha stream antigo (evita múltiplos leitores após rerun)
-        if 'video_stream' in st.session_state:
-            try: st.session_state.video_stream.stop()
-            except: pass
-            del st.session_state['video_stream']
-
         col_img1, col_img2, _ = st.columns([1,4,1])
         with col_img1:
             st.image(image_path_cam, width=200)
@@ -568,265 +827,30 @@ def recognition_behavior():
         run_system = col1.button("Iniciar Monitoramento")
         stop_system = col2.button("Parar Monitoramento")
 
-        model = YOLO('yolo11m-pose.pt')
-        episode_manager = BehaviorEpisodeManager(
-            persist_callback=insert_behavior_episode,
-            stability_seconds=2.0,
-            stability_frames=15,
-        )
-        st.session_state["episode_manager"] = episode_manager
         BOX_MARGIN_RATIO = 0.2
+        fps_limit = 20
 
-        # FaceAnalysis
-        if device == "cuda":
-            model_face = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider","CPUExecutionProvider"])
-            model_face.prepare(ctx_id=0, det_size=(832,832))
-        else:
-            model_face = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-            model_face.prepare(ctx_id=-1, det_size=(832,832))
+        def ensure_monitoring_resources(current_device: str):
+            if "episode_manager" not in st.session_state:
+                st.session_state["episode_manager"] = BehaviorEpisodeManager(
+                    persist_callback=insert_behavior_episode,
+                    stability_seconds=2.0,
+                    stability_frames=15,
+                )
 
-        # Embeddings conhecidos + normalização fora do loop
-        known_face_encodings, known_face_names = load_insightface_data()
-        known_face_encodings_norm = (
-            known_face_encodings / (np.linalg.norm(known_face_encodings, axis=1, keepdims=True) + 1e-6)
-        ) if len(known_face_encodings) > 0 else None
+            if "monitor_runtime" not in st.session_state:
+                st.session_state["monitor_runtime"] = build_monitor_runtime(
+                    current_device,
+                    RELAY_HOST,
+                    RELAY_PORT,
+                )
 
-        messege = st.empty()
-        if not run_system and not stop_system:
-            messege.info("Obs: O sistema irá monitorar os comportamentos dos alunos durante a aula. Inicie o monitoramento!")
+            st.session_state.setdefault("monitor_waiting_since", time.time())
+            st.session_state["monitoring_active"] = True
+            st.session_state["monitoring_device"] = current_device
 
-        if run_system:
-            messege.empty()
-            stframe = st.empty()
-
-            fps_limit = 20
-            prev_time = 0.0
-
-            video_stream = VideoStream((RELAY_HOST, RELAY_PORT)).start()
-            st.session_state.video_stream = video_stream
-
-            # flush rápido para pegar frame atual
-            t0 = time.time()
-            while time.time() - t0 < 0.3:
-                _ = video_stream.read()
-
-            detector = DetectorWorker(model, model_face, device).start()
-
-            while video_stream.running:
-                if time.time() - prev_time < 1.0 / fps_limit:
-                    time.sleep(0.001)
-                    continue
-                prev_time = time.time()
-
-                frame = video_stream.read()
-                if frame is None:
-                    continue
-
-                detector.update_frame(frame)
-                results, faces = detector.get_outputs()
-
-                # ---- FACES (nomeia e guarda na memória curto prazo) ----
-                face_named = []  # lista de ((fx1,fy1,fx2,fy2), nome)
-                if faces:
-                    for face in faces:
-                        fx1, fy1, fx2, fy2 = face.bbox.astype(int)
-                        name_face = "Desconhecido"
-                        if known_face_encodings_norm is not None:
-                            emb = face.embedding
-                            emb = emb / (np.linalg.norm(emb) + 1e-6)
-                            sims = cosine_similarity([emb], known_face_encodings_norm)[0]
-                            best_idx = int(np.argmax(sims))
-                            if float(sims[best_idx]) > 0.45:
-                                name_face = known_face_names[best_idx]
-                        face_named.append(((fx1, fy1, fx2, fy2), name_face))
-                        if name_face != "Desconhecido":
-                            remember_name((fx1, fy1, fx2, fy2), name_face)
-
-                # ---- POSE + Lógica de comportamento ----
-                if results:
-                    for result in results:
-                        if not hasattr(result, 'keypoints') or len(result.keypoints) == 0:
-                            continue
-                        keypoints_all = result.keypoints.data.cpu().numpy()
-
-                        # desenhar HUD no canto esquerdo (uma vez por frame; atualiza com a última pessoa válida)
-                        hud_lines = []
-
-                        for pid, person_keypoints in enumerate(keypoints_all):
-                            if len(person_keypoints) == 0:
-                                continue
-
-                            current_behavior = "Atento"
-                            have_all = False
-
-                            if person_keypoints.shape[0] > 10:
-                                nose = person_keypoints[0]
-                                ls, rs = person_keypoints[5], person_keypoints[6]   # OMBROS
-                                le, re = person_keypoints[7], person_keypoints[8]   # COTOVELOS
-                                lw, rw = person_keypoints[9], person_keypoints[10]  # PUNHOS
-
-                                confs = [p[2] for p in [nose, ls, rs, le, re, lw, rw]]
-                                have_all = all(c > CONFIDENCE_THRESHOLD for c in confs)
-                                if have_all:
-                                    current_behavior = classify_behavior(nose, ls, rs, le, re, lw, rw, CONFIDENCE_THRESHOLD)
-
-                            # Caixa da pessoa pelos keypoints
-                            x_coords = [p[0] for p in person_keypoints if p[2] > CONFIDENCE_THRESHOLD]
-                            y_coords = [p[1] for p in person_keypoints if p[2] > CONFIDENCE_THRESHOLD]
-                            if not x_coords or not y_coords:
-                                continue
-                            x_min, x_max = int(min(x_coords)), int(max(x_coords))
-                            y_min, y_max = int(min(y_coords)), int(max(y_coords))
-                            y_min = max(0, int(y_min - BOX_MARGIN_RATIO * (y_max - y_min)))
-                            person_box = (x_min, y_min, x_max, y_max)
-
-                            # 1) tenta associar pelo IoU com faces do frame
-                            best_i, name_student = 0.0, "Desconhecido"
-                            for (fb, nm) in face_named:
-                                i = iou(person_box, fb)
-                                if i > best_i:
-                                    best_i, name_student = i, nm
-                            # 2) se não achou, tenta memória curta
-                            if best_i < 0.10:
-                                name_student = resolve_name(person_box)
-
-                            # Distraído (só quando tem nome válido)
-                            if name_student != "Desconhecido" and person_keypoints.shape[0] > 10:
-                                nose  = person_keypoints[0]
-                                l_eye = person_keypoints[1]   # olho E
-                                r_eye = person_keypoints[2]   # olho D
-                                l_ear = person_keypoints[3]   # orelha E
-                                r_ear = person_keypoints[4]   # orelha D
-                                ls    = person_keypoints[5]   # ombro E
-                                rs    = person_keypoints[6]   # ombro D
-
-                                # só roda se temos nariz + ao menos um par (olhos ou orelhas) usável
-                                if nose[2] > CONFIDENCE_THRESHOLD:
-                                    lateral_status = is_lateral_view(
-                                        nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=CONFIDENCE_THRESHOLD
-                                    )
-                                    new_behavior = check_distracted_status(
-                                        name_student, lateral_status, lateral_timers, timeout=10
-                                    )
-                                    if new_behavior:
-                                        current_behavior = new_behavior
-
-
-                            # =================== HISTERese Dormindo <-> Atento ===================
-                                raw_behavior = current_behavior
-                                key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
-                                state = sleep_smoother.setdefault(key, {"state":"Atento","sleep":0,"awake":0})
-
-                                if raw_behavior == "Dormindo":
-                                    state["sleep"] += 1; state["awake"] = 0
-                                    if state["state"] != "Dormindo" and state["sleep"] >= ENTER_SLEEP_FRAMES:
-                                        state["state"] = "Dormindo"
-                                else:
-                                    state["awake"] += 1; state["sleep"] = 0
-                                    if state["state"] == "Dormindo" and state["awake"] >= EXIT_SLEEP_FRAMES:
-                                        state["state"] = raw_behavior
-                                    elif state["state"] != "Dormindo":
-                                        state["state"] = raw_behavior
-
-                                current_behavior = state["state"]
-                                # =================== FIM DA HISTERese ============================================
-
-
-
-                            # Registro por episódios com debounce (sem gravar por frame)
-                            if name_student != "Desconhecido":
-                                now_dt = datetime.datetime.now()
-                                episode_manager.update_behavior(
-                                    student_key=name_student,
-                                    student_name=name_student,
-                                    student_id=None,
-                                    behavior=current_behavior,
-                                    timestamp=now_dt,
-                                    school=school,
-                                    discipline=discipline,
-                                    teacher=user_name,
-                                    source="realtime",
-                                )
-
-                            # ------------------- Desenho da caixa/label (com cor por comportamento) -------------------
-                            # BGR: vermelho (0,0,255) para Agitado/Dormindo; verde (0,255,0) para os demais
-
-                            box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
-
-                            cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
-                            
-                            label_text =  f"{name_student} - {current_behavior}"
-
-                            
-                            font = cv2.FONT_HERSHEY_SIMPLEX
-                            scale = 0.6
-                            thickness = 2
-                            pad_x, pad_y = 6, 4
-
-                            # Tamanho do texto
-                            (text_w, text_h), _ = cv2.getTextSize(label_text, font, scale, thickness)
-                            
-
-                            # Posição: canto superior esquerdo da box
-                            tx = int(x_min)
-                            ty = int(y_min)
-
-                            top = ty - text_h - 2*pad_y
-                            if top < 0:
-                                top = ty
-                                ty = top + text_h + pad_y
-
-                            cv2.rectangle(frame, (tx, top), (tx + text_w + 2*pad_x, top + text_h + 2*pad_y), box_color, -1) # Fundo da cor da box
-                            
-                            cv2.putText(frame, label_text, (tx + pad_x, top + text_h + pad_y - 1), font, scale, (255, 255, 255), thickness, cv2.LINE_AA) # Texto branco por cima
-                             
-
-                            # -------- HUD de debug no canto esquerdo --------
-                            if show_debug and have_all:
-                                # Recalcular variáveis para exibir (mesma lógica da função):
-                                shoulder_y = (ls[1] + rs[1]) / 2.0
-                                s = max(1.0, abs(ls[0] - rs[0]))
-                                best_vert_dist = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
-                                near_thr = max(10.0, 0.32 * s)
-
-                                hud_lines = [
-                                    f"s (ombro a ombro): {s:.1f}",
-                                    f"near_thr: {near_thr:.1f}",
-                                    f"shoulder_y: {shoulder_y:.1f}",
-                                    f"nose_y: {nose[1]:.1f}",
-                                    f"best_vert_dist: {best_vert_dist:.1f}",
-                                ]
-                                # desenha do lado esquerdo
-                                y0 = 24
-                                for i, text in enumerate(hud_lines):
-                                    cv2.putText(frame, text, (10, y0 + int(i * 22 * debug_font)),
-                                                
-                                                cv2.FONT_HERSHEY_SIMPLEX, debug_font, (255, 255, 0), 2)
-                                    
-                            
-                            
-                # Render leve
-                disp = cv2.resize(frame, (960, 540))
-                stframe.image(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
-
-            # encerra ao sair
-            episode_manager.flush_all(
-                timestamp=datetime.datetime.now(),
-                school=school,
-                discipline=discipline,
-                teacher=user_name,
-                source="realtime",
-            )
-            st.session_state.pop("episode_manager", None)
-            try: detector.stop()
-            except: pass
-            try: video_stream.stop()
-            except: pass
-            if 'video_stream' in st.session_state:
-                del st.session_state['video_stream']
-
-        if stop_system:
-            if "episode_manager" in st.session_state:
+        def stop_monitoring(flush_episodes: bool):
+            if flush_episodes and "episode_manager" in st.session_state:
                 st.session_state["episode_manager"].flush_all(
                     timestamp=datetime.datetime.now(),
                     school=school,
@@ -834,12 +858,48 @@ def recognition_behavior():
                     teacher=user_name,
                     source="realtime",
                 )
-                st.session_state.pop("episode_manager", None)
+            st.session_state.pop("episode_manager", None)
+
+            teardown_monitor_runtime()
+            st.session_state.pop("monitor_waiting_since", None)
+            st.session_state["monitoring_active"] = False
+            st.session_state.pop("monitoring_device", None)
+
+        messege = st.empty()
+        monitoring_active = st.session_state.get("monitoring_active", False)
+
+        if run_system:
+            if monitoring_active and st.session_state.get("monitoring_device") != device:
+                stop_monitoring(flush_episodes=True)
+                monitoring_active = False
+
+            ensure_monitoring_resources(device)
+            monitoring_active = True
+
+        if stop_system:
+            stop_monitoring(flush_episodes=True)
+            monitoring_active = False
             st.info("Monitoramento parado.")
-            if 'video_stream' in st.session_state:
-                try: st.session_state.video_stream.stop()
-                except: pass
-                del st.session_state['video_stream']
+
+        if not monitoring_active and not run_system and not stop_system:
+            messege.info("Obs: O sistema irá monitorar os comportamentos dos alunos durante a aula. Inicie o monitoramento!")
+        elif monitoring_active:
+            if st.session_state.get("monitoring_device") != device:
+                stop_monitoring(flush_episodes=True)
+                ensure_monitoring_resources(device)
+            else:
+                ensure_monitoring_resources(device)
+
+            messege.empty()
+            render_monitor_fragment(
+                school=school,
+                discipline=discipline,
+                user_name=user_name,
+                confidence_threshold=CONFIDENCE_THRESHOLD,
+                show_debug=show_debug,
+                debug_font=debug_font,
+                box_margin_ratio=BOX_MARGIN_RATIO,
+            )
 
     # ------------------ GRÁFICOS ------------------
     elif menu_option == "Gráficos":

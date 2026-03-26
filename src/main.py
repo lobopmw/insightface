@@ -17,8 +17,10 @@ st.set_page_config(page_title="Monitoramento - SEDUC", page_icon="../images/icon
 
 image_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/classroom1.jpg"))
 
-# Criando a tablea usuário
-user_table()
+# Criando/verificando a tabela de usuário uma vez por sessão
+if "users_table_ready" not in st.session_state:
+    user_table()
+    st.session_state["users_table_ready"] = True
 
 
 # Funções de manipulação de "cookies" usando query params
@@ -67,7 +69,7 @@ def login():
 
     with colbutton2:
 
-        if st.button("**➡ Login**", use_container_width=True, key="submit-button", type="primary"):
+        if st.button("**➡ Login**", width="stretch", key="submit-button", type="primary"):
             
             if validar_cpf(cpf):
                 try:
