@@ -1,4 +1,5 @@
 
+import base64
 import os
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
@@ -57,6 +58,7 @@ image_path_cam       = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 image_path_table     = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/table.png"))
 
 lateral_timers = {}
+DISTRACTED_TIMEOUT_SECONDS = 2.5
 
 
 def get_runtime_diagnostics():
@@ -273,7 +275,9 @@ def render_monitor_fragment(
                 if best_i < 0.10:
                     name_student = resolve_name(person_box)
 
-                if name_student != "Desconhecido" and person_keypoints.shape[0] > 10:
+                behavior_key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
+
+                if person_keypoints.shape[0] > 10:
                     nose = person_keypoints[0]
                     l_eye = person_keypoints[1]
                     r_eye = person_keypoints[2]
@@ -282,19 +286,21 @@ def render_monitor_fragment(
                     ls = person_keypoints[5]
                     rs = person_keypoints[6]
 
-                    if nose[2] > confidence_threshold:
+                    if nose[2] > confidence_threshold or (ls[2] > confidence_threshold and rs[2] > confidence_threshold):
                         lateral_status = is_lateral_view(
                             nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=confidence_threshold
                         )
+                        back_status = is_back_view(
+                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=confidence_threshold
+                        )
                         new_behavior = check_distracted_status(
-                            name_student, lateral_status, lateral_timers, timeout=10
+                            behavior_key, (lateral_status or back_status), lateral_timers, timeout=DISTRACTED_TIMEOUT_SECONDS
                         )
                         if new_behavior:
                             current_behavior = new_behavior
 
                     raw_behavior = current_behavior
-                    key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
-                    state = sleep_smoother.setdefault(key, {"state":"Atento","sleep":0,"awake":0})
+                    state = sleep_smoother.setdefault(behavior_key, {"state":"Atento","sleep":0,"awake":0})
 
                     if raw_behavior == "Dormindo":
                         state["sleep"] += 1
@@ -537,11 +543,26 @@ def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5, cam_
 
     return cond_ratio_eyes or cond_conf_eyes or cond_ears
 
-def check_distracted_status(name, is_lateral, lateral_timers, timeout=10):
+def is_back_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5):
+    shoulder_width = float(abs(ls[0] - rs[0]))
+    if ls[2] <= conf_thr or rs[2] <= conf_thr or shoulder_width < 35.0:
+        return False
+
+    frontal_face_missing = (
+        nose[2] < conf_thr and
+        l_eye[2] < conf_thr and
+        r_eye[2] < conf_thr
+    )
+    ears_missing = l_ear[2] < conf_thr and r_ear[2] < conf_thr
+    shoulder_balance = abs(ls[1] - rs[1]) < max(18.0, 0.35 * shoulder_width)
+
+    return frontal_face_missing and ears_missing and shoulder_balance
+
+def check_distracted_status(name, is_distracted_pose, lateral_timers, timeout=10):
     now = time.time()
     if name not in lateral_timers:
         lateral_timers[name] = {"start_time": None, "is_lateral": False}
-    if is_lateral:
+    if is_distracted_pose:
         if not lateral_timers[name]["is_lateral"] and lateral_timers[name]["start_time"] is None:
             lateral_timers[name]["start_time"] = now
             lateral_timers[name]["is_lateral"] = True
@@ -563,30 +584,44 @@ def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
     s  = max(1.0, float(abs(ls[0] - rs[0])))   # escala ombro-a-ombro
 
     # --- MÃOS ALTAS -> Perguntando/Agitado (robusto à distância) ---
-    up_L = (lw[1] < nose[1]) or (lw[1] < (cy - 0.14 * s))
-    up_R = (rw[1] < nose[1]) or (rw[1] < (cy - 0.14 * s))
+    shoulder_line = cy - 0.10 * s
+    up_L = (
+        lw[2] > threshold and le[2] > threshold and
+        lw[1] < nose[1] and lw[1] < shoulder_line and lw[1] < le[1]
+    )
+    up_R = (
+        rw[2] > threshold and re[2] > threshold and
+        rw[1] < nose[1] and rw[1] < shoulder_line and rw[1] < re[1]
+    )
     if up_L and up_R:
         return "Agitado" if abs(lw[0] - rw[0]) > 0.90 * s else "Perguntando"
     if up_L or up_R:
         return "Perguntando"
 
-    # --- DORMINDO: cabeça baixa OU nariz próximo do cotovelo (apoio no braço) ---
+    # --- DORMINDO: cabeça baixa com apoio de braço/mão ---
     MIN_S_FOR_SLEEP = 28.0
     DY_COEF   = 0.14
     DX_COEF   = 0.35 if s >= 50 else 0.55   # tolera cabeça de lado se estiver longe
     ELB_NEAR  = 0.26
+    WRIST_ELBOW_X_NEAR = 0.38
+    WRIST_ELBOW_Y_NEAR = 0.30
 
     dy = nose[1] - cy
     dx = abs(nose[0] - cx)
     best_elbow = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
     hands_low  = (lw[1] > cy - 0.08 * s) and (rw[1] > cy - 0.08 * s)
     elbows_low = (le[1] > cy - 0.12 * s) and (re[1] > cy - 0.12 * s)
+    left_support = abs(lw[0] - le[0]) < WRIST_ELBOW_X_NEAR * s and abs(lw[1] - le[1]) < WRIST_ELBOW_Y_NEAR * s
+    right_support = abs(rw[0] - re[0]) < WRIST_ELBOW_X_NEAR * s and abs(rw[1] - re[1]) < WRIST_ELBOW_Y_NEAR * s
+    wrist_support = left_support or right_support
 
     if s >= MIN_S_FOR_SLEEP and hands_low and elbows_low:
         head_low_ok   = (dy > DY_COEF * s) and (dx < DX_COEF * s)
         elbow_near_ok = (best_elbow < ELB_NEAR * s) and (nose[1] > cy - 0.10 * s)
-        if head_low_ok or elbow_near_ok:
+        if wrist_support and (head_low_ok or elbow_near_ok):
             return "Dormindo"
+        if head_low_ok:
+            return "Distraido"
 
     # --- fallback ---
     return "Atento"
@@ -876,7 +911,7 @@ def recognition_behavior():
         if run_system:
             messege.empty()
             stframe = st.empty()
-            fps_limit = 20
+            fps_limit = 12
             prev_time = 0.0
 
             model = YOLO('yolo11m-pose.pt')
@@ -979,7 +1014,9 @@ def recognition_behavior():
                                 if best_i < 0.10:
                                     name_student = resolve_name(person_box)
 
-                                if name_student != "Desconhecido" and person_keypoints.shape[0] > 10:
+                                behavior_key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
+
+                                if person_keypoints.shape[0] > 10:
                                     nose = person_keypoints[0]
                                     l_eye = person_keypoints[1]
                                     r_eye = person_keypoints[2]
@@ -988,19 +1025,21 @@ def recognition_behavior():
                                     ls = person_keypoints[5]
                                     rs = person_keypoints[6]
 
-                                    if nose[2] > CONFIDENCE_THRESHOLD:
+                                    if nose[2] > CONFIDENCE_THRESHOLD or (ls[2] > CONFIDENCE_THRESHOLD and rs[2] > CONFIDENCE_THRESHOLD):
                                         lateral_status = is_lateral_view(
                                             nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=CONFIDENCE_THRESHOLD
                                         )
+                                        back_status = is_back_view(
+                                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=CONFIDENCE_THRESHOLD
+                                        )
                                         new_behavior = check_distracted_status(
-                                            name_student, lateral_status, lateral_timers, timeout=10
+                                            behavior_key, (lateral_status or back_status), lateral_timers, timeout=DISTRACTED_TIMEOUT_SECONDS
                                         )
                                         if new_behavior:
                                             current_behavior = new_behavior
 
                                     raw_behavior = current_behavior
-                                    key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
-                                    state = sleep_smoother.setdefault(key, {"state":"Atento","sleep":0,"awake":0})
+                                    state = sleep_smoother.setdefault(behavior_key, {"state":"Atento","sleep":0,"awake":0})
 
                                     if raw_behavior == "Dormindo":
                                         state["sleep"] += 1
@@ -1068,7 +1107,16 @@ def recognition_behavior():
                                                     cv2.FONT_HERSHEY_SIMPLEX, debug_font, (255, 255, 0), 2)
 
                     disp = cv2.resize(frame, (960, 540))
-                    stframe.image(cv2.cvtColor(disp, cv2.COLOR_BGR2RGB), channels="RGB", width="stretch")
+                    ok, jpg = cv2.imencode(".jpg", disp, [cv2.IMWRITE_JPEG_QUALITY, 82])
+                    if ok:
+                        b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
+                        stframe.markdown(
+                            (
+                                '<img src="data:image/jpeg;base64,'
+                                f'{b64}" style="width:100%;height:auto;display:block;border-radius:8px;" />'
+                            ),
+                            unsafe_allow_html=True,
+                        )
             finally:
                 episode_manager.flush_all(
                     timestamp=datetime.datetime.now(),

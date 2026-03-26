@@ -25,6 +25,7 @@ class BehaviorEpisodeManager:
         self.stability_seconds = float(stability_seconds)
         self.stability_frames = int(stability_frames)
         self.states: Dict[str, StudentEpisodeState] = {}
+        self.last_persist_error: Optional[str] = None
 
     def update_behavior(
         self,
@@ -141,14 +142,19 @@ class BehaviorEpisodeManager:
         end_time: datetime,
         source: str,
     ):
-        self.persist_callback(
-            school=school,
-            discipline=discipline,
-            teacher=teacher,
-            id_student=student_id,
-            student=student_name,
-            behavior=behavior,
-            start_time=start_time,
-            end_time=end_time,
-            source=source,
-        )
+        try:
+            self.persist_callback(
+                school=school,
+                discipline=discipline,
+                teacher=teacher,
+                id_student=student_id,
+                student=student_name,
+                behavior=behavior,
+                start_time=start_time,
+                end_time=end_time,
+                source=source,
+            )
+            self.last_persist_error = None
+        except Exception as exc:
+            self.last_persist_error = str(exc)
+            print(f"[episode_manager] persist error: {exc}")
