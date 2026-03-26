@@ -104,6 +104,20 @@ def connect_database():
 
         cursor.execute(
             '''
+            CREATE INDEX IF NOT EXISTS idx_behavior_episode_student_date
+            ON behavior_episode (student, date)
+            '''
+        )
+
+        cursor.execute(
+            '''
+            CREATE INDEX IF NOT EXISTS idx_behavior_episode_student_start_time
+            ON behavior_episode (student, start_time)
+            '''
+        )
+
+        cursor.execute(
+            '''
             CREATE TABLE IF NOT EXISTS students (
                 id VARCHAR(255) PRIMARY KEY,
                 name VARCHAR(255)

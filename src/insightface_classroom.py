@@ -4,6 +4,7 @@ os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
     "rtsp_transport;tcp|fflags;nobuffer|max_delay;0|buffer_size;1024"
 )
+import sys
 
 import cv2
 from ultralytics import YOLO
@@ -26,6 +27,7 @@ from socket_video_stream import VideoStream  # cliente do relay via socket
 import threading
 from collections import deque
 from behavior_episode_service import BehaviorEpisodeManager
+from ui.report_page import render_report_page
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -55,6 +57,41 @@ image_path_cam       = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 image_path_table     = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/table.png"))
 
 lateral_timers = {}
+
+
+def get_runtime_diagnostics():
+    diagnostics = {
+        "python": sys.executable,
+        "nvidia_visible_devices": os.getenv("NVIDIA_VISIBLE_DEVICES", "(nao definido)"),
+        "nvidia_driver_capabilities": os.getenv("NVIDIA_DRIVER_CAPABILITIES", "(nao definido)"),
+        "torch_version": "(indisponivel)",
+        "torch_cuda_version": "(indisponivel)",
+        "torch_cuda_available": False,
+        "torch_device_count": 0,
+        "torch_device_name": "(nenhuma GPU visivel)",
+        "onnxruntime_version": "(indisponivel)",
+        "onnxruntime_providers": [],
+    }
+
+    try:
+        diagnostics["torch_version"] = torch.__version__
+        diagnostics["torch_cuda_version"] = torch.version.cuda or "(sem CUDA no build)"
+        diagnostics["torch_cuda_available"] = torch.cuda.is_available()
+        diagnostics["torch_device_count"] = torch.cuda.device_count()
+        if diagnostics["torch_cuda_available"] and diagnostics["torch_device_count"] > 0:
+            diagnostics["torch_device_name"] = torch.cuda.get_device_name(0)
+    except Exception as exc:
+        diagnostics["torch_device_name"] = f"erro: {exc}"
+
+    try:
+        import onnxruntime as ort
+
+        diagnostics["onnxruntime_version"] = ort.__version__
+        diagnostics["onnxruntime_providers"] = ort.get_available_providers()
+    except Exception as exc:
+        diagnostics["onnxruntime_providers"] = [f"erro: {exc}"]
+
+    return diagnostics
 
 # ---------------- Associação por IoU + memória curta de nome ----------------
 def iou(a, b):
@@ -283,7 +320,10 @@ def recognition_behavior():
         st.session_state.clear()
         st.rerun()
 
-    menu_option = st.sidebar.radio("Menu", ["Cadastro de Alunos", "Monitoramento", "Gráficos", "Tabela"])
+    menu_option = st.sidebar.radio(
+        "Menu",
+        ["Cadastro de Alunos", "Monitoramento", "Gráficos", "Relatórios"],
+    )
 
     # ------------------ CADASTRO ------------------
     if menu_option == "Cadastro de Alunos":
@@ -486,8 +526,39 @@ def recognition_behavior():
 
         CONFIDENCE_THRESHOLD = st.sidebar.slider("Confiança Mínima", 0.10, 0.80, 0.35, 0.05)
         use_gpu = st.sidebar.checkbox("Usar GPU (CUDA)", value=True)
-        device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        runtime_info = get_runtime_diagnostics()
+        cuda_available = runtime_info["torch_cuda_available"]
+        device = "cuda" if use_gpu and cuda_available else "cpu"
         st.sidebar.write(f"Dispositivo: {device}")
+
+        if use_gpu and not cuda_available:
+            st.sidebar.warning(
+                "CUDA foi solicitada, mas o processo atual nao enxerga GPU. "
+                "O app continuara em CPU."
+            )
+
+        with st.sidebar.expander("Diagnostico CUDA"):
+            st.caption(f"Python: `{runtime_info['python']}`")
+            st.caption(
+                f"PyTorch: `{runtime_info['torch_version']}` | "
+                f"CUDA build: `{runtime_info['torch_cuda_version']}`"
+            )
+            st.caption(
+                f"torch.cuda.is_available(): `{runtime_info['torch_cuda_available']}` | "
+                f"GPUs visiveis: `{runtime_info['torch_device_count']}`"
+            )
+            st.caption(f"GPU 0: `{runtime_info['torch_device_name']}`")
+            st.caption(
+                f"ONNX Runtime: `{runtime_info['onnxruntime_version']}` | "
+                f"Providers: `{', '.join(runtime_info['onnxruntime_providers'])}`"
+            )
+            st.caption(
+                f"NVIDIA_VISIBLE_DEVICES: `{runtime_info['nvidia_visible_devices']}`"
+            )
+            st.caption(
+                "NVIDIA_DRIVER_CAPABILITIES: "
+                f"`{runtime_info['nvidia_driver_capabilities']}`"
+            )
 
         # HUD de debug no canto esquerdo
         show_debug = st.sidebar.toggle("Mostrar debug (Dormindo)", value=False)
@@ -775,36 +846,6 @@ def recognition_behavior():
         st.title("📊 GRÁFICOS")
         show_behavior_charts()
 
-    # ------------------ TABELA ------------------
-    elif menu_option == "Tabela":
-        col_img1, col_img2, _ = st.columns([1, 6, 1])
-        with col_img1:
-            st.image(image_path_table, width=200)
-        with col_img2:
-            st.title("INFORMAÇÕES")
-
-        df = df_behavior_charts()
-        if df.empty:
-            st.warning("Nenhum dado registrado.")
-            return
-
-        today = datetime.datetime.now()
-        selected_date = st.date_input("Selecione a Data", value=today,
-                                       min_value=today - timedelta(days=365),
-                                       max_value=today + timedelta(days=365))
-
-        selected_disciplines = st.multiselect("Filtrar por Disciplinas", df['Disciplina'].unique().tolist())
-        selected_behaviors = st.multiselect("Filtrar por Comportamentos", df['Comportamento'].unique().tolist())
-
-        df['Data'] = pd.to_datetime(df['Data']).dt.date
-        filtered_df = df[df['Data'] == selected_date]
-
-        if selected_disciplines:
-            filtered_df = filtered_df[filtered_df['Disciplina'].isin(selected_disciplines)]
-        if selected_behaviors:
-            filtered_df = filtered_df[filtered_df['Comportamento'].isin(selected_behaviors)]
-
-        if filtered_df.empty:
-            st.warning("Nenhum dado encontrado para os filtros selecionados.")
-        else:
-            st.dataframe(filtered_df, use_container_width=True)
+    # ------------------ RELATÓRIOS ------------------
+    elif menu_option == "Relatórios":
+        render_report_page()

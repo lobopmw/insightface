@@ -29,8 +29,11 @@ services:
       DB_PASSWORD: insightface_password
       RELAY_HOST: relay
       RELAY_PORT: ${RELAY_PORT:-5555}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     ports:
       - "8501:8501"
+    gpus: all
     networks:
       - insightface_network
     volumes:

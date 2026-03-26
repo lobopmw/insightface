@@ -55,11 +55,10 @@ Observação importante:
 ```bash
 docker compose up --build -d db relay app
 ```
-
-Para habilitar GPU NVIDIA quando o host estiver configurado com o runtime/container toolkit:
-```bash
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d db relay app
-```
+Observação:
+- O compose principal já sobe o serviço `app` com GPU NVIDIA (`gpus: all`).
+- Isso exige host com driver NVIDIA + NVIDIA Container Toolkit configurados.
+- Se a máquina não tiver GPU NVIDIA disponível, o serviço `app` pode falhar ao iniciar.
 
 ### 4.3 Verifique logs
 ```bash

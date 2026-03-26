@@ -41,6 +41,37 @@ BEHAVIOR_WEIGHTS: Dict[str, float] = {
     "Agitado": 0.04,
 }
 
+STUDENT_PROFILES: List[Dict[str, float]] = [
+    {
+        "Atento": 0.70,
+        "Perguntando": 0.18,
+        "Distraido": 0.08,
+        "Dormindo": 0.02,
+        "Agitado": 0.04,
+    },
+    {
+        "Atento": 0.42,
+        "Perguntando": 0.34,
+        "Distraido": 0.10,
+        "Dormindo": 0.04,
+        "Agitado": 0.10,
+    },
+    {
+        "Atento": 0.34,
+        "Perguntando": 0.08,
+        "Distraido": 0.36,
+        "Dormindo": 0.10,
+        "Agitado": 0.12,
+    },
+    {
+        "Atento": 0.24,
+        "Perguntando": 0.08,
+        "Distraido": 0.20,
+        "Dormindo": 0.38,
+        "Agitado": 0.10,
+    },
+]
+
 
 def load_mapping_rows() -> List[dict]:
     if not os.path.exists(MAP_PATH):
@@ -197,24 +228,13 @@ def _pick_behavior(rng: random.Random, behavior_weights: Dict[str, float], previ
 
 def get_student_behavior_weights(student_index: int, total_students: int) -> Dict[str, float]:
     """
-    Maioria dos alunos com perfil mais positivo (Atento alto).
-    Pequena parcela com mais Distraido/Dormindo.
+    Distribui perfis observacionais distintos entre os alunos para gerar
+    relatorios com variabilidade mais util em demonstracoes.
     """
     if total_students <= 0:
         return dict(BEHAVIOR_WEIGHTS)
-
-    # Ultimo 25% dos alunos recebe perfil com mais risco de distracao/sono.
-    cutoff = max(1, int(total_students * 0.75))
-    if student_index >= cutoff:
-        return {
-            "Atento": 0.42,
-            "Perguntando": 0.14,
-            "Distraido": 0.22,
-            "Dormindo": 0.14,
-            "Agitado": 0.08,
-        }
-
-    return dict(BEHAVIOR_WEIGHTS)
+    profile = STUDENT_PROFILES[student_index % len(STUDENT_PROFILES)]
+    return dict(profile)
 
 
 def build_fake_episodes_for_student(
@@ -271,11 +291,12 @@ def generate_fake_episodes_for_all_students(
     school: str,
     discipline: str,
     teacher: str,
+    class_start_time: time,
 ) -> List[dict]:
     rng = random.Random(seed)
     all_eps: List[dict] = []
 
-    start_base = datetime.combine(target_date, time(hour=8, minute=0))
+    start_base = datetime.combine(target_date, class_start_time)
 
     for idx, row in enumerate(mapping_rows):
         student_start = start_base + timedelta(minutes=idx * 2)
@@ -372,7 +393,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Seed de alunos e episódios fictícios")
     parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"), help="Data base YYYY-MM-DD")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--total-minutes", type=int, default=50)
+    parser.add_argument(
+        "--total-minutes",
+        type=int,
+        default=None,
+        help="Duração total da aula em minutos. Se omitido, será calculada a partir de --start-time e --end-time.",
+    )
+    parser.add_argument("--start-time", default="08:00", help="Horário de início da aula no formato HH:MM")
+    parser.add_argument("--end-time", default="11:40", help="Horário de término da aula no formato HH:MM")
     parser.add_argument("--school", default="Escola Estadual Criança Esperança")
     parser.add_argument("--discipline", default="Matemática")
     parser.add_argument("--teacher", default="Professor Simulado")
@@ -383,6 +411,17 @@ def parse_args():
 def main():
     args = parse_args()
     target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+    class_start_time = datetime.strptime(args.start_time, "%H:%M").time()
+    class_end_time = datetime.strptime(args.end_time, "%H:%M").time()
+
+    if args.total_minutes is not None:
+        total_minutes = args.total_minutes
+    else:
+        start_dt = datetime.combine(target_date, class_start_time)
+        end_dt = datetime.combine(target_date, class_end_time)
+        if end_dt <= start_dt:
+            raise ValueError("--end-time deve ser maior que --start-time")
+        total_minutes = int((end_dt - start_dt).total_seconds() // 60)
 
     mapping_rows = load_mapping_rows()
     emb_by_name = load_embeddings_by_name()
@@ -391,10 +430,11 @@ def main():
         mapping_rows=mapping_rows,
         target_date=target_date,
         seed=args.seed,
-        total_minutes=args.total_minutes,
+        total_minutes=total_minutes,
         school=args.school,
         discipline=args.discipline,
         teacher=args.teacher,
+        class_start_time=class_start_time,
     )
 
     csv_path = export_episodes_csv(episodes, target_date)
