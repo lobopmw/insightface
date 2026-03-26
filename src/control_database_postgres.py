@@ -489,18 +489,18 @@ def show_behavior_charts():
     with col_g1:
         pie_config = dict(plotly_config_base)
         pie_config["toImageButtonOptions"] = {"format": "png", "filename": f"distribuicao_{selected_student}_{data_formatada}", "scale": 2}
-        st.plotly_chart(fig_pie, use_container_width=True, config=pie_config)
+        st.plotly_chart(fig_pie, width="stretch", config=pie_config)
         pie_buf = gerar_download_plotly(fig_pie, f"distribuicao_{selected_student}_{data_formatada}")
 
     with col_g3:
         bar_config = dict(plotly_config_base)
         bar_config["toImageButtonOptions"] = {"format": "png", "filename": f"tempo_total_{selected_student}_{data_formatada}", "scale": 2}
-        st.plotly_chart(fig_bar, use_container_width=True, config=bar_config)
+        st.plotly_chart(fig_bar, width="stretch", config=bar_config)
         bar_buf = gerar_download_plotly(fig_bar, f"tempo_total_{selected_student}_{data_formatada}")
 
     timeline_config = dict(plotly_config_base)
     timeline_config["toImageButtonOptions"] = {"format": "png", "filename": f"timeline_{selected_student}_{data_formatada}", "scale": 2}
-    st.plotly_chart(fig_timeline, use_container_width=True, config=timeline_config)
+    st.plotly_chart(fig_timeline, width="stretch", config=timeline_config)
     timeline_buf = gerar_download_plotly(fig_timeline, f"timeline_{selected_student}_{data_formatada}")
 
     if pie_buf is None or bar_buf is None or timeline_buf is None:

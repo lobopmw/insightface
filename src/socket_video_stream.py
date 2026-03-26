@@ -19,6 +19,7 @@ class VideoStream:
         self.last_error = None
         self.last_frame_at = None
         self.frames_received = 0
+        self.frame_id = 0
 
     def _connect(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -58,6 +59,7 @@ class VideoStream:
                     self.frame = frame
                     self.last_frame_at = time.time()
                     self.frames_received += 1
+                    self.frame_id += 1
             except Exception as exc:
                 self.connected = False
                 self.last_error = repr(exc)
@@ -77,6 +79,12 @@ class VideoStream:
     def read(self):
         with self.lock:
             return None if self.frame is None else self.frame.copy()
+
+    def read_with_meta(self):
+        with self.lock:
+            if self.frame is None:
+                return None, self.frame_id, self.last_frame_at
+            return self.frame.copy(), self.frame_id, self.last_frame_at
 
     def stop(self):
         self.running = False
@@ -99,4 +107,5 @@ class VideoStream:
                 "last_frame_at": self.last_frame_at,
                 "frames_received": self.frames_received,
                 "has_frame": self.frame is not None,
+                "frame_id": self.frame_id,
             }

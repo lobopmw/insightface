@@ -665,14 +665,14 @@ def render_report_page():
         table_col, chart_col = st.columns([1.15, 1], gap="large")
         with table_col:
             st.markdown("##### Tabela de Frequências")
-            st.dataframe(display_summary, use_container_width=True, hide_index=True)
+            st.dataframe(display_summary, width="stretch", hide_index=True)
         with chart_col:
             st.markdown("##### Leitura Visual")
             chart_inner_col1, chart_inner_col2 = st.columns(2)
             with chart_inner_col1:
-                st.plotly_chart(fig_occurrence, use_container_width=True)
+                st.plotly_chart(fig_occurrence, width="stretch")
             with chart_inner_col2:
-                st.plotly_chart(fig_duration, use_container_width=True)
+                st.plotly_chart(fig_duration, width="stretch")
 
     with tabs[2]:
         st.subheader("Distribuição Temporal")
@@ -682,7 +682,7 @@ def render_report_page():
         st.caption(
             "Cada bloco representa um episódio contínuo classificado pelo sistema ao longo do horário monitorado."
         )
-        st.plotly_chart(fig_timeline, use_container_width=True)
+        st.plotly_chart(fig_timeline, width="stretch")
         _render_justified_text(temporal_summary)
         st.markdown("##### Resumo complementar por faixas horárias reais")
         st.caption(
@@ -691,7 +691,7 @@ def render_report_page():
         if hourly_summary_display.empty:
             st.info("Não houve base suficiente para montar o resumo complementar por faixas horárias.")
         else:
-            st.dataframe(hourly_summary_display, use_container_width=True, hide_index=True)
+            st.dataframe(hourly_summary_display, width="stretch", hide_index=True)
 
     with tabs[3]:
         st.subheader("Comparações")
@@ -704,30 +704,30 @@ def render_report_page():
 
         if fig_period is not None:
             st.markdown("##### Comparação entre Recortes do Período")
-            st.plotly_chart(fig_period, use_container_width=True)
+            st.plotly_chart(fig_period, width="stretch")
 
         st.markdown("##### Comparação com o Período Imediatamente Anterior")
         if comparison_display.empty:
             st.info("Não há base comparativa suficiente.")
         else:
-            st.dataframe(comparison_display, use_container_width=True, hide_index=True)
+            st.dataframe(comparison_display, width="stretch", hide_index=True)
 
     with tabs[4]:
         st.subheader("Detalhes e Exportação")
         detail_col1, detail_col2 = st.columns([1, 1], gap="large")
         with detail_col1:
             with st.expander("Resumo cronológico dos episódios", expanded=False):
-                st.dataframe(timeline_display, use_container_width=True, hide_index=True)
+                st.dataframe(timeline_display, width="stretch", hide_index=True)
             with st.expander("Consistência comportamental detalhada", expanded=False):
                 if consistency_display.empty:
                     st.info("Não houve base suficiente para detalhar a consistência comportamental.")
                 else:
-                    st.dataframe(consistency_display, use_container_width=True, hide_index=True)
+                    st.dataframe(consistency_display, width="stretch", hide_index=True)
             with st.expander("Dias com maior recorrência por comportamento", expanded=False):
                 if peak_days_display.empty:
                     st.info("Não houve dados suficientes para destacar os dias de maior recorrência.")
                 else:
-                    st.dataframe(peak_days_display, use_container_width=True, hide_index=True)
+                    st.dataframe(peak_days_display, width="stretch", hide_index=True)
         with detail_col2:
             st.markdown("##### Exportação")
             export_col1, export_col2, export_col3 = st.columns(3)
@@ -736,21 +736,21 @@ def render_report_page():
                 data=_to_csv_bytes(display_summary),
                 file_name=f"relatorio_resumo_{selected_student}_{format_date_br(start_date)}_{format_date_br(end_date)}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
             export_col2.download_button(
                 "Baixar CSV dos episódios",
                 data=_to_csv_bytes(timeline_display),
                 file_name=f"relatorio_episodios_{selected_student}_{format_date_br(start_date)}_{format_date_br(end_date)}.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
             export_col3.download_button(
                 "Baixar PDF",
                 data=build_report_pdf(report_data),
                 file_name=f"relatorio_observacional_{selected_student}_{format_date_br(start_date)}_{format_date_br(end_date)}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                width="stretch",
             )
 
             st.markdown("##### Limitações Metodológicas")
