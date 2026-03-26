@@ -1,198 +1,215 @@
-# Monitoramento de Comportamentos em Sala
+# Sistema de Monitoramento Comportamental em Sala
 
-Sistema de monitoramento em tempo real com **YOLO Pose** + **InsightFace**, streaming **RTSP → Socket (relay)**, e interface em **Streamlit**.
+Sistema com **Streamlit + YOLO Pose + InsightFace** para:
+- cadastrar alunos com fotos por pose,
+- gerar embeddings faciais,
+- monitorar comportamentos em tempo real,
+- salvar episódios de comportamento no PostgreSQL,
+- exibir gráficos de tempo por comportamento.
 
-## 🧱 Requisitos
+## 1. O que o sistema salva
 
-- Python 3.9+  
-- GPU opcional (CUDA) para acelerar o InsightFace/YOLO
-- Câmera IP com RTSP (ex.: Hikvision/Intelbras)
-- VLC/ffplay (opcional, pra testar o RTSP)
+### Arquivos locais (`data/`)
+- `data/mapeamento_alunos.csv`: cadastro lógico (`nome`, `matricula`, `hash`).
+- `data/alunos/<hash>/...`: fotos por pose de cada aluno.
+- `data/embeddings.npy`: embeddings médios por aluno (fallback local).
+- `data/names.pkl`: nomes na ordem dos embeddings (fallback local).
+- `data/behavior_episodes_fake_YYYYMMDD.csv`: CSV de episódios simulados (quando gerar seed).
 
-### Dependências (pip)
+### Banco PostgreSQL
+- `users`: usuários da aplicação (login).
+- `students`: referência básica de alunos (`id/hash`, `name`).
+- `face_embeddings`: embeddings persistidos no banco.
+- `behavior_episode`: episódios de comportamento (tempo).
+- `behavior_log`: legado (não usado pelos gráficos novos).
+
+## 2. Fluxo de arquitetura (resumo)
+
+1. **Cadastro** (UI) grava fotos + atualiza `mapeamento_alunos.csv`.
+2. **Script de embeddings** lê fotos e grava `embeddings.npy`/`names.pkl` + `face_embeddings` no banco.
+3. **Monitoramento** reconhece aluno e classifica comportamento.
+4. Com debounce, o sistema fecha/abre episódios e grava em `behavior_episode`.
+5. **Gráficos** leem `behavior_episode` (minutos e percentuais).
+
+## 3. Pré-requisitos
+
+- Docker + Docker Compose
+- (Opcional) GPU CUDA para acelerar IA
+- Fonte de vídeo:
+  - RTSP (`rtsp://...`) ou
+  - webcam local (`/dev/video0` no Linux)
+
+## 4. Configuração inicial
+
+### 4.1 Ajuste `.env`
+Campos principais:
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+- `RTSP_URL`
+- `RELAY_PORT`, `RELAY_SEND_FPS`, `RELAY_QUALITY`
+
+Observação importante:
+- Fora do Docker: normalmente `DB_HOST=localhost`
+- Dentro do Compose (serviço `app`): o host do banco é `db`
+
+### 4.2 Suba os serviços
 ```bash
-pip install -r requirements.txt
+docker compose up --build -d db relay app
 ```
-Se não tiver `requirements.txt`, instale:
+Observação:
+- O compose principal já sobe o serviço `app` com GPU NVIDIA (`gpus: all`).
+- Isso exige host com driver NVIDIA + NVIDIA Container Toolkit configurados.
+- Se a máquina não tiver GPU NVIDIA disponível, o serviço `app` pode falhar ao iniciar.
+
+### 4.3 Verifique logs
 ```bash
-pip install streamlit ultralytics opencv-python numpy torch torchvision torchaudio             scikit-learn pillow insightface onnxruntime-gpu onnxruntime             pandas plotly reportlab
-```
-> Use **onnxruntime-gpu** se tiver CUDA. Senão, deixe só **onnxruntime**.
-
-## 📁 Estrutura recomendada de pastas
-
-```
-project/
-│
-├─ src/
-│   ├─ insightface_classroom.py        # app Streamlit (principal)
-│   ├─ socket_video_stream.py          # cliente do relay (VideoStream)
-│   ├─ server_rtsp_socket.py           # servidor relay RTSP → socket (exemplo)
-│   ├─ register_face_multi_images_avg.py
-│   ├─ control_database.py             # DB e gráficos
-│   ├─ utils_criptografia.py           # salvar_mapeamento (hash)
-│   └─ images/
-│       ├─ classroom1.jpg
-│       ├─ faces.png
-│       ├─ cam_IA.png
-│       └─ table.png
-│
-└─ data/
-    ├─ mapeamento_alunos.csv           # CSV global (fora da pasta 'alunos')
-    ├─ alunos/
-    │   └─ <hash_do_aluno>/
-    │       ├─ frontal/
-    │       ├─ lateral_direita/
-    │       ├─ lateral_esquerda/
-    │       └─ cabeca_baixa/
-    ├─ embeddings.npy                  # gerado pelo script de registro
-    └─ names.json / names.pkl          # gerado pelo script de registro
+docker compose logs -f db
+docker compose logs -f relay
+docker compose logs -f app
 ```
 
-> **Importante:** O app já usa `data/` como raiz, com:
-> - `data/mapeamento_alunos.csv`
-> - `data/alunos/<hash>/...`
+## 5. Procedimento operacional completo (para quem nunca usou)
 
-## 🚀 Passo a passo (primeira execução)
+## 5.1 Acessar aplicação
+- URL padrão: `http://localhost:8501`
+- Faça login/cadastro de usuário se necessário.
 
-### 1) Teste rápido do RTSP (opcional)
-Confirme que sua URL RTSP funciona:
+## 5.2 Cadastrar alunos (fotos por pose)
+No menu **Cadastro de Alunos**:
+1. Preencha `Nome` e `Matrícula`.
+2. Configure quantidade/intervalo de captura.
+3. Capture as poses guiadas até finalizar.
+
+O sistema vai:
+- gerar/atualizar `hash` do aluno,
+- atualizar `data/mapeamento_alunos.csv`,
+- salvar fotos em `data/alunos/<hash>/<pose>/...`.
+
+## 5.3 Gerar embeddings após cadastro (obrigatório)
+Depois de cadastrar/alterar alunos, execute:
 ```bash
-vlc "rtsp://usuario:senha@IP_DA_CAMERA:554/Streaming/Channels/101"
-# ou:
-ffplay -rtsp_transport tcp "rtsp://usuario:senha@IP:554/Streaming/Channels/101"
+docker compose run --rm app python src/register_face_multi_images_avg.py
 ```
 
-### 2) Inicie o **servidor relay** (RTSP → socket)
-No terminal A:
+Esse script vai:
+1. Ler `data/mapeamento_alunos.csv`.
+2. Processar imagens por aluno.
+3. Gerar embedding médio por aluno.
+4. Atualizar arquivos locais:
+   - `data/embeddings.npy`
+   - `data/names.pkl`
+5. Fazer upsert em `face_embeddings` no PostgreSQL.
+
+## 5.4 (Opcional) Popular dados simulados para gráficos
+Para demos/testes sem monitoramento ao vivo:
 ```bash
-cd src
-python server_rtsp_socket.py   --rtsp "rtsp://usuario:senha@IP_DA_CAMERA:554/Streaming/Channels/101"   --host 0.0.0.0   --port 5555   --send-fps 15   --resize 1280x720
+docker compose run --rm app python src/seed_existing_students_and_fake_behavior.py --date 2026-02-13 --seed 42 --total-minutes 50
 ```
-- **--send-fps**: taxa de quadros enviada ao cliente  
-- **--resize**: opcional (diminui resolução pra reduzir latência/CPU)
-- **host/port**: mantenha coerente com o cliente (**127.0.0.1:5555** por padrão)
 
-> Dica: para **menos delay**, use o **substream** da câmera (ex.: *Channels/102*), GOP curto (I-frame mais frequente), bitrate CBR moderado, desative “smart codecs”.
+Esse script vai:
+- ler alunos do `mapeamento_alunos.csv`,
+- fazer upsert em `students`,
+- reforçar/upsert em `face_embeddings` (se houver embeddings locais),
+- gerar episódios simulados,
+- inserir em `behavior_episode`,
+- exportar CSV `data/behavior_episodes_fake_20260213.csv`.
 
-### 3) Abra o **app Streamlit**
-No terminal B:
+Comportamentos simulados atuais:
+- `Atento`, `Perguntando`, `Dormindo`, `Distraido`, `Agitado`.
+
+## 5.5 Monitoramento em tempo real
+No menu **Monitoramento**:
+1. Garanta que o relay está ativo.
+2. Clique **Iniciar Monitoramento**.
+3. Ajuste confiança/GPU conforme ambiente.
+
+Durante monitoramento, o sistema:
+- detecta/identifica aluno,
+- classifica comportamento,
+- aplica debounce de estabilidade,
+- salva **episódios** em `behavior_episode` (não salva por frame).
+
+## 5.6 Gráficos
+No menu **Gráficos**:
+- filtro por aluno, disciplina e data,
+- gráficos de:
+  - percentual do tempo por comportamento,
+  - tempo total (minutos) por comportamento,
+  - linha do tempo de episódios.
+
+Download:
+- PNG via ícone de câmera do Plotly (nativo no browser).
+- Download consolidado via backend depende do ambiente (quando disponível).
+
+## 6. Quando cada tabela é persistida
+
+- `users`: no cadastro/login de usuário.
+- `students`: no script de seed (`seed_existing_students_and_fake_behavior.py`).
+- `face_embeddings`:
+  - no `register_face_multi_images_avg.py` (principal),
+  - também no seed, quando houver embeddings locais.
+- `behavior_episode`:
+  - no monitoramento ao vivo (episódios reais, `source=realtime`),
+  - no seed (episódios simulados, `source=simulated`).
+
+## 7. Validação rápida (SQL)
+
+```sql
+SELECT COUNT(*) FROM students;
+SELECT COUNT(*) FROM face_embeddings;
+SELECT COUNT(*) FROM behavior_episode;
+
+SELECT source, COUNT(*)
+FROM behavior_episode
+GROUP BY source;
+```
+
+## 8. Comandos úteis
+
+### Subir stack
 ```bash
-cd src
-streamlit run insightface_classroom.py
+docker compose up -d db relay app
 ```
-Na interface:
-- Menu → **Cadastro de Alunos**
-- Depois → **Monitoramento**
-- **Gráficos** e **Tabela** para análise/relatórios
 
-## 👤 Cadastro de alunos (automático por pose)
-
-1. Abra **Cadastro de Alunos**
-2. Preencha **Disciplina**, **Nome** e **Matrícula**
-3. Ajuste:
-   - **Imagens por pose** (padrão 10)
-   - **Intervalo entre fotos (seg)** (padrão 0.8s)
-   - **Contagem inicial (seg)** (padrão 2s) → “respira, posiciona, valendo!”
-4. Clique **Iniciar captura desta pose**  
-   O app salva automaticamente as N imagens da pose na pasta:
-   ```
-   data/alunos/<hash_aluno>/<pose>/
-   ```
-5. Clique **Próximo** para a pose seguinte até concluir todas.  
-6. Ao final, clique **Finalizar cadastro**.
-
-> O arquivo **data/mapeamento_alunos.csv** guarda `nome`, `matricula`, `hash` do aluno.
-
-## 🧠 Gerar/atualizar embeddings (faces conhecidas)
-
-Sempre que cadastrar/alterar alunos, **rode**:
+### Rodar embeddings
 ```bash
-cd src
-python register_face_multi_images_avg.py
+docker compose run --rm app python src/register_face_multi_images_avg.py
 ```
-Esse script varre `data/alunos/`, calcula os embeddings médios por aluno e escreve:
-- `data/embeddings.npy`
-- `data/names.json` (ou `.pkl`, conforme seu script)
 
-O app carrega isso com `load_insightface_data()`.
-
-## 👁️ Monitoramento
-
-1. Certifique-se de que o **relay** (servidor socket) está **rodando**.
-2. No app, vá em **Monitoramento** e clique **Iniciar Monitoramento**.
-3. Opções:
-   - **Confiança Mínima** (pose)
-   - **Usar GPU (CUDA)** se disponível
-4. O app reconhece o aluno pelo rosto (se estiver no banco de embeddings) e classifica:
-   - **Atento**, **Perguntando**, **Escrevendo**, **Dormindo**, **Agitado**  
-   - **Distraído** é aplicado por tempo se a cabeça ficar de lado (regras simples)
-
-As mudanças de comportamento são enviadas para o banco via `insert_count_behavior(...)`.
-
-## 📊 Gráficos e 📋 Tabela
-
-- **Gráficos**: selecione **Aluno**, **Disciplina** e **Data**  
-  - Distribuição por comportamento  
-  - Contagem por comportamento  
-  - Evolução temporal  
-  - Botões para **download PNG** e **PDF** com os três gráficos
-- **Tabela**: filtragem por data, disciplina e comportamento
-
-## ⚙️ Notas de desempenho / baixa latência
-
-- Prefira **substream** (ex.: *Channels/102*) para reduzir bitrate/resolução.  
-- GOP curto (I-frame mais frequente), CBR moderado, **TCP** no RTSP.  
-- No **servidor relay**:
-  - Ajuste `--send-fps` e `--resize`.  
-  - Evite enviar mais FPS do que o necessário.
-- No **app**:
-  - Mantemos um **fps de render** fixo e um **worker** de IA que sempre processa o frame **mais recente** (evita fila).
-  - InsightFace: no GPU, `ctx_id=0`; no CPU, `ctx_id=-1` e `det_size=(640,640)` pra acelerar.
-- Evite múltiplas instâncias do app/relay usando a mesma porta.  
-- Se notar atraso após “rerun”, confira se o **relay** e a **webcam de cadastro** foram fechados (o app já faz isso ao mudar de página, mas vale checar).
-
-## 🛠️ Solução de problemas
-
-- **Sem vídeo no monitoramento**  
-  - Verifique o log do **servidor relay**  
-  - IP/porta corretos? (app usa `("127.0.0.1", 5555)`)  
-  - Firewall liberado?
-- **Muito delay**  
-  - Reduza `--resize` ou `--send-fps` no servidor  
-  - Use substream da câmera  
-  - Verifique que não há outra janela/consumidor do RTSP em paralelo
-- **Aluno como “Desconhecido”**  
-  - Rode novamente `register_face_multi_images_avg.py` após novos cadastros  
-  - Tire mais imagens **frontais** (bem iluminadas)  
-  - Verifique o **threshold** de similaridade (padrão ~0.45 na app)
-- **Contagens não aparecem nos gráficos/tabela**  
-  - Os gráficos filtram por **Aluno**, **Disciplina** e **Data** — confira se coincidem  
-  - Confirme se `insert_count_behavior(...)` está sendo chamado (muda de estado)  
-  - Cheque a base/arquivo SQLite configurado em `control_database.py`
-
-## 🔒 Observações de privacidade
-
-- O app guarda um **hash** do aluno (nome + matrícula) para nomear as pastas.  
-- As fotos ficam em `data/alunos/<hash>/...`.  
-- Proteja a pasta `data/` e o acesso à máquina/servidor.
-
-## 🧪 Comandos úteis (resumo)
-
+### Gerar simulados
 ```bash
-# 1) Relay (servidor)
-python src/server_rtsp_socket.py --rtsp "rtsp://user:pass@CAM_IP:554/Streaming/Channels/101"   --host 0.0.0.0 --port 5555 --send-fps 15 --resize 1280x720
-
-# 2) App
-streamlit run src/insightface_classroom.py
-
-# 3) Atualizar embeddings após cadastro
-python src/register_face_multi_images_avg.py
+docker compose run --rm app python src/seed_existing_students_and_fake_behavior.py --date 2026-02-13 --seed 42 --total-minutes 50
 ```
 
-## ✍️ Dicas finais
+### Entrar no banco e validar
+```bash
+docker compose exec -T db psql -U insightface_user -d insightface_db
+```
 
-- Para evitar “rerun” com streams abertos, sempre **pare o monitoramento** antes de mexer em opções/voltar pro cadastro.
-- Se trocar **host/porta** do relay, atualize no `VideoStream(("HOST", PORTA))`.
-- Se precisar mudar caminhos, ajuste no início do app:
-  - `DATA_DIR`, `DATABASE_PATH`, `MAPPING_CSV`.
+## 9. Troubleshooting
+
+### `students` aparece vazio no Database Navigator
+- Verifique se está na conexão/banco corretos.
+- Faça refresh de schema/tabela.
+- Rode `SELECT COUNT(*) FROM students;`.
+- Confirme se o seed foi executado no mesmo banco do app.
+
+### Aluno aparece como desconhecido
+- Reexecute o script de embeddings após novos cadastros.
+- Garanta fotos frontais com iluminação adequada.
+- Verifique se `face_embeddings` foi realmente populada.
+
+### Gráfico sem dados
+- Confira filtros (aluno/disciplina/data).
+- Valide se há linhas em `behavior_episode` para a data.
+
+### Delay no vídeo
+- Reduza `RELAY_SEND_FPS`.
+- Use stream secundário da câmera (menor resolução/bitrate).
+- Evite múltiplos consumidores simultâneos do mesmo RTSP.
+
+## 10. Boas práticas operacionais
+
+- Após qualquer novo cadastro: **sempre** rodar geração de embeddings.
+- Para demos: gerar dados simulados antes da apresentação.
+- Não misturar conexões de banco local e do Docker sem confirmar `DB_HOST`.
+- Monitorar logs de `relay` e `app` quando houver falhas de detecção.

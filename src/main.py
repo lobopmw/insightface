@@ -4,7 +4,7 @@ from streamlit_option_menu import option_menu
 import pandas as pd
 import bcrypt
 from sqlalchemy import text
-from control_database import engine, registrar_usuario, user_table
+from control_database_postgres import engine, registrar_usuario, user_table
 from streamlit_cookies_controller import CookieController
 from insightface_classroom import recognition_behavior
 from register_face_multi_images_avg import register_faces
@@ -17,8 +17,10 @@ st.set_page_config(page_title="Monitoramento - SEDUC", page_icon="../images/icon
 
 image_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/classroom1.jpg"))
 
-# Criando a tablea usuário
-user_table()
+# Criando/verificando a tabela de usuário uma vez por sessão
+if "users_table_ready" not in st.session_state:
+    user_table()
+    st.session_state["users_table_ready"] = True
 
 
 # Funções de manipulação de "cookies" usando query params
@@ -67,7 +69,7 @@ def login():
 
     with colbutton2:
 
-        if st.button("**➡ Login**", use_container_width=True, key="submit-button", type="primary"):
+        if st.button("**➡ Login**", width="stretch", key="submit-button", type="primary"):
             
             if validar_cpf(cpf):
                 try:
@@ -77,7 +79,25 @@ def login():
 
                         if result:
                             stored_nome, stored_cpf, stored_password, stored_city, stored_state = result
-                            if bcrypt.checkpw(password.encode('utf-8'), stored_password.encode('utf-8')):
+
+                            try:
+                                password_matches = bcrypt.checkpw(
+                                    password.encode('utf-8'),
+                                    stored_password.encode('utf-8')
+                                )
+                            except ValueError:
+                                password_matches = stored_password == password
+                                if password_matches:
+                                    new_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
+                                    update_query = text("""
+                                        UPDATE users
+                                        SET password = :password
+                                        WHERE cpf = :cpf
+                                    """)
+                                    conn.execute(update_query, {"password": new_hash, "cpf": stored_cpf})
+                                    conn.commit()
+
+                            if password_matches:
                                 st.session_state['authenticated'] = True
                                 st.session_state['name'] = stored_nome
                                 st.session_state['cpf'] = stored_cpf
@@ -170,26 +190,32 @@ def cadastrar_usuario():
     st.subheader("➕ Cadastro de novo usuário")
 
     # Coleta de informações do novo usuário
-    cpf = st.text_input("CPF", max_chars=11, placeholder="Informe o CPF", label_visibility= "hidden")
-    name = st.text_input("Nome", placeholder="Informe seu nome completo", label_visibility= "hidden")
-    city = st.text_input("Cidade", placeholder="Informe sua cidade", label_visibility= "hidden")
-    state = st.selectbox("Estado", nomes_estados, label_visibility= "hidden")
-    password = st.text_input("Senha", type="password", placeholder="Senha", label_visibility= "hidden")
-    confirm_password = st.text_input("Confirmar Senha", type="password", placeholder="Confirmar senha", label_visibility= "hidden")
+    cpf = st.text_input("CPF", max_chars=11, placeholder="Informe o CPF", label_visibility="hidden")
+    name = st.text_input("Nome", placeholder="Informe seu nome completo", label_visibility="hidden")
+    city = st.text_input("Cidade", placeholder="Informe sua cidade", label_visibility="hidden")
+
+    estado_options = [f"{e['sigla']} - {e['nome']}" if e['sigla'] != 'BR' else 'BR - Informe o estado' for e in estados]
+    state_raw = st.selectbox("Estado", estado_options, label_visibility="hidden")
+    state = state_raw.split(" - ")[0] if " - " in state_raw else state_raw
+
+    password = st.text_input("Senha", type="password", placeholder="Senha", label_visibility="hidden")
+    confirm_password = st.text_input("Confirmar Senha", type="password", placeholder="Confirmar senha", label_visibility="hidden")
 
     if st.button("Registrar"):
         if validar_cpf(cpf):
             if password != confirm_password:
                 st.error("As senhas não coincidem!")
-            elif cpf and password and city and state and name:
-                hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
-                sucess = registrar_usuario(cpf,name, hashed_password, city, state)
-                if sucess:
-                    st.success(f"Usuário '{name}' cadastrado com sucesso!")
-                else:
-                    st.warning(f"CPF: {cpf} já está cadastrado com outro usuário!")
+            elif not cpf or not name or not city or not state or state == 'BR':
+                st.error("Todos os campos são obrigatórios e estado deve ser válido!")
             else:
-                st.error("Todos os campos são obrigatórios!")
+                hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
+                sucess = registrar_usuario(cpf, name, hashed_password, city, state)
+                if sucess == "ok":
+                    st.success(f"Usuário '{name}' cadastrado com sucesso!")
+                elif sucess == "cpf_exists":
+                    st.warning(f"CPF: {cpf} já está cadastrado com outro usuário!")
+                else:
+                    st.error("Erro ao cadastrar usuário. Verifique a conexão com o banco de dados e os logs.")
         else:
             st.warning("CPF inválido!")
        
@@ -245,17 +271,17 @@ def main():
                 elif st.session_state["selected_option"] == "Cadastrar":
                     cadastrar_usuario()
 
-                # # Mostrar o rádio abaixo do formulário
-                # radio1, radio2, radio3 = st.columns([3,2,3])
-                # with radio2:
-                #     st.radio(
-                #         "Selecione uma opção:",
-                #         ["Login", "Cadastrar"],
-                #         index=["Login", "Cadastrar"].index(st.session_state["selected_option"]),
-                #         key="selected_option",
-                #         horizontal=True,
-                #         label_visibility="hidden"
-                #     )
+                # Mostrar o rádio abaixo do formulário
+                radio1, radio2, radio3 = st.columns([3,2,3])
+                with radio2:
+                    st.radio(
+                        "Selecione uma opção:",
+                        ["Login", "Cadastrar"],
+                        index=["Login", "Cadastrar"].index(st.session_state["selected_option"]),
+                        key="selected_option",
+                        horizontal=True,
+                        label_visibility="hidden"
+                    )
 
                 
 

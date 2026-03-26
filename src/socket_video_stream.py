@@ -15,12 +15,19 @@ class VideoStream:
         self.frame = None
         self.lock = threading.Lock()
         self.thread = None
+        self.connected = False
+        self.last_error = None
+        self.last_frame_at = None
+        self.frames_received = 0
+        self.frame_id = 0
 
     def _connect(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.connect(self.server)
         self.sock = s
+        self.connected = True
+        self.last_error = None
 
     def _recvall(self, n):
         buf = b""
@@ -50,7 +57,12 @@ class VideoStream:
                     continue
                 with self.lock:
                     self.frame = frame
-            except Exception:
+                    self.last_frame_at = time.time()
+                    self.frames_received += 1
+                    self.frame_id += 1
+            except Exception as exc:
+                self.connected = False
+                self.last_error = repr(exc)
                 try:
                     if self.sock: self.sock.close()
                 except Exception:
@@ -68,8 +80,15 @@ class VideoStream:
         with self.lock:
             return None if self.frame is None else self.frame.copy()
 
+    def read_with_meta(self):
+        with self.lock:
+            if self.frame is None:
+                return None, self.frame_id, self.last_frame_at
+            return self.frame.copy(), self.frame_id, self.last_frame_at
+
     def stop(self):
         self.running = False
+        self.connected = False
         try:
             if self.thread: self.thread.join(timeout=1)
         except Exception:
@@ -78,3 +97,15 @@ class VideoStream:
             if self.sock: self.sock.close()
         except Exception:
             pass
+
+    def get_status(self):
+        with self.lock:
+            return {
+                "server": self.server,
+                "connected": self.connected,
+                "last_error": self.last_error,
+                "last_frame_at": self.last_frame_at,
+                "frames_received": self.frames_received,
+                "has_frame": self.frame is not None,
+                "frame_id": self.frame_id,
+            }
