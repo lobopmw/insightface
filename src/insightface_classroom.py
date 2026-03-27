@@ -17,11 +17,13 @@ import pandas as pd
 from datetime import timedelta
 import datetime
 from control_database_postgres import (
+    APP_TIMEZONE,
     DEFAULT_SCHOOL_NAME,
     SESSION_STATUS_OPEN,
     SESSION_STATUS_CLOSED,
     close_monitoring_session,
     create_monitoring_session,
+    get_local_now,
     get_monitoring_session_summary,
     get_student_lookup_for_scope,
     insert_behavior_episode,
@@ -83,6 +85,10 @@ FACE_DET_SIZE_CPU = (960, 960)
 POSE_IMGSZ_GPU = 1280
 POSE_IMGSZ_CPU = 960
 POSE_DET_CONF = 0.22
+FACE_RECOGNITION_BASE_THRESHOLD = 0.45
+FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.41
+FACE_RECOGNITION_SMALL_THRESHOLD = 0.37
+FACE_RECOGNITION_MIN_MARGIN = 0.015
 
 
 def img_to_base64(path: str) -> str:
@@ -226,7 +232,7 @@ def _render_context_card(session_state_label: str, selected_subject_label: str, 
     total_delta = None
     if start_time is not None:
         if session_state_label == "Em andamento":
-            elapsed_delta = pd.Timestamp.now().to_pydatetime() - start_time.to_pydatetime()
+            elapsed_delta = pd.Timestamp.now(tz=APP_TIMEZONE).tz_localize(None).to_pydatetime() - start_time.to_pydatetime()
         elif end_time is not None:
             total_delta = end_time.to_pydatetime() - start_time.to_pydatetime()
 
@@ -345,14 +351,7 @@ def process_monitor_fragment(
         detected_faces_count = len(faces)
         for face in faces:
             fx1, fy1, fx2, fy2 = face.bbox.astype(int)
-            name_face = "Desconhecido"
-            if known_face_encodings_norm is not None:
-                emb = face.embedding
-                emb = emb / (np.linalg.norm(emb) + 1e-6)
-                sims = cosine_similarity([emb], known_face_encodings_norm)[0]
-                best_idx = int(np.argmax(sims))
-                if float(sims[best_idx]) > 0.45:
-                    name_face = known_face_names[best_idx]
+            name_face = identify_face(face, known_face_encodings_norm, known_face_names)
             face_named.append(((fx1, fy1, fx2, fy2), name_face))
             if name_face != "Desconhecido":
                 recognized_faces_count += 1
@@ -446,7 +445,7 @@ def process_monitor_fragment(
                     current_behavior = state["state"]
 
                 if name_student != "Desconhecido" and episode_manager is not None:
-                    now_dt = datetime.datetime.now()
+                    now_dt = get_local_now()
                     student_record = student_lookup.get(name_student, {})
                     episode_manager.update_behavior(
                         student_key=name_student,
@@ -544,6 +543,36 @@ def should_render_track(identity: str, show_unknown_boxes: bool = False) -> bool
         return True
     normalized_identity = (identity or "").strip().lower()
     return normalized_identity not in UNKNOWN_IDENTITY_LABELS
+
+
+def identify_face(face, known_face_encodings_norm, known_face_names):
+    if known_face_encodings_norm is None or len(known_face_names) == 0:
+        return "Desconhecido"
+
+    emb = face.embedding
+    emb = emb / (np.linalg.norm(emb) + 1e-6)
+    sims = cosine_similarity([emb], known_face_encodings_norm)[0]
+    best_idx = int(np.argmax(sims))
+    best_score = float(sims[best_idx])
+
+    second_best_score = -1.0
+    if len(sims) > 1:
+        second_best_score = float(np.partition(sims, -2)[-2])
+
+    fx1, fy1, fx2, fy2 = face.bbox.astype(int)
+    face_area = max(1, (fx2 - fx1) * (fy2 - fy1))
+    if face_area < 7000:
+        acceptance_threshold = FACE_RECOGNITION_SMALL_THRESHOLD
+    elif face_area < 14000:
+        acceptance_threshold = FACE_RECOGNITION_MEDIUM_THRESHOLD
+    else:
+        acceptance_threshold = FACE_RECOGNITION_BASE_THRESHOLD
+
+    margin = best_score - second_best_score if second_best_score >= 0 else best_score
+    if best_score >= acceptance_threshold and margin >= FACE_RECOGNITION_MIN_MARGIN:
+        return known_face_names[best_idx]
+
+    return "Desconhecido"
 
 
 def resolve_name(person_box):
@@ -974,7 +1003,7 @@ def recognition_behavior():
                     stframe.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), channels="RGB", width=480)
 
                     if now >= (st.session_state.next_time or now):
-                        timestamp    = datetime.datetime.now().strftime("%Y%m%d_%H%M%S%f")
+                        timestamp    = get_local_now().strftime("%Y%m%d_%H%M%S%f")
                         nome_arquivo = f"{pose_atual}_{timestamp}.jpg"
                         caminho      = os.path.join(pasta_pose, nome_arquivo)
                         cv2.imwrite(caminho, frame)
@@ -1374,7 +1403,7 @@ def recognition_behavior():
             episode_manager = st.session_state.get("episode_manager")
             if episode_manager is not None and current_session is not None:
                 episode_manager.flush_all(
-                    timestamp=datetime.datetime.now(),
+                    timestamp=get_local_now(),
                     school=school,
                     discipline=current_session["subject_name"],
                     teacher=user_name,

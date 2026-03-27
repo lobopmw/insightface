@@ -3,6 +3,7 @@ import io
 import os
 import tempfile
 from contextlib import contextmanager
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -48,6 +49,11 @@ engine = create_engine(
 DEFAULT_SCHOOL_NAME = "Escola Estadual Criança Esperança"
 SESSION_STATUS_OPEN = "em_andamento"
 SESSION_STATUS_CLOSED = "encerrada"
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Araguaina")
+
+
+def get_local_now() -> datetime.datetime:
+    return datetime.datetime.now(ZoneInfo(APP_TIMEZONE)).replace(tzinfo=None)
 
 
 def _ensure_schema(cursor) -> None:
@@ -554,7 +560,7 @@ def get_student_lookup_for_scope(user_context: dict):
 
 
 def create_monitoring_session(teacher_id: int, subject_id: int, class_id: int):
-    now = datetime.datetime.now()
+    now = get_local_now()
     with connect_database() as (conn, cursor):
         cursor.execute(
             """
@@ -579,7 +585,7 @@ def create_monitoring_session(teacher_id: int, subject_id: int, class_id: int):
 
 
 def close_monitoring_session(session_id: int, status: str = SESSION_STATUS_CLOSED):
-    end_time = datetime.datetime.now()
+    end_time = get_local_now()
     with connect_database() as (conn, cursor):
         cursor.execute(
             """
@@ -630,8 +636,8 @@ def insert_count_behavior(
     end_time,
     last_behavior=None,
 ):
-    start_time = start_time or datetime.datetime.now().strftime("%H:%M:%S")
-    end_time = end_time or datetime.datetime.now().strftime("%H:%M:%S")
+    start_time = start_time or get_local_now().strftime("%H:%M:%S")
+    end_time = end_time or get_local_now().strftime("%H:%M:%S")
 
     with connect_database() as (conn, cursor):
         if last_behavior is None or last_behavior != behavior:

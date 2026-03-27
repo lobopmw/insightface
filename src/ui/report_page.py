@@ -436,6 +436,225 @@ def _render_highlight_card(kind: str, title: str, value: str, supporting_text: s
     )
 
 
+def _inject_report_top_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .report-top-hero {
+            padding: 1.15rem 0 0.35rem 0;
+        }
+        .report-top-title {
+            display: flex;
+            align-items: center;
+            gap: 0.9rem;
+            margin-bottom: 0.4rem;
+        }
+        .report-top-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            background: linear-gradient(180deg, rgba(115,154,255,0.24) 0%, rgba(87,108,196,0.16) 100%);
+            border: 1px solid rgba(140,160,255,0.24);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+        .report-top-heading {
+            font-size: 2.3rem;
+            line-height: 1.08;
+            font-weight: 800;
+            color: #F4F6FB;
+            margin: 0;
+        }
+        .report-top-subheading {
+            font-size: 1rem;
+            line-height: 1.65;
+            color: #A7ADBB;
+            margin: 0.25rem 0 0.1rem 0;
+        }
+        .report-top-panel {
+            border-radius: 22px;
+            border: 1px solid rgba(255,255,255,0.09);
+            background: linear-gradient(180deg, rgba(27,29,38,0.84) 0%, rgba(22,24,33,0.94) 100%);
+            padding: 1.1rem 1rem 0.35rem 1rem;
+            box-shadow: 0 16px 36px rgba(0,0,0,0.18);
+            margin: 1rem 0 1rem 0;
+        }
+        .report-panel-title {
+            font-size: 0.88rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #9EA6B6;
+            font-weight: 700;
+            margin-bottom: 0.8rem;
+        }
+        .report-kpi-shell {
+            border-radius: 22px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: linear-gradient(180deg, rgba(27,29,38,0.84) 0%, rgba(22,24,33,0.94) 100%);
+            box-shadow: 0 16px 36px rgba(0,0,0,0.18);
+            padding: 0.8rem 0.8rem 0.6rem 0.8rem;
+            margin-bottom: 1rem;
+        }
+        .report-kpi-card {
+            min-height: 290px;
+            padding: 1rem 1rem 0.8rem 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            text-align: center;
+            border-right: 1px solid rgba(255,255,255,0.06);
+        }
+        .report-kpi-card.last {
+            border-right: none;
+        }
+        .report-kpi-orb {
+            width: 126px;
+            height: 126px;
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            box-shadow: inset 0 10px 22px rgba(255,255,255,0.14), 0 12px 30px rgba(0,0,0,0.22);
+        }
+        .report-kpi-title {
+            font-size: 1.02rem;
+            line-height: 1.35;
+            color: #F3F5F9;
+            font-weight: 700;
+            margin-bottom: 0.55rem;
+        }
+        .report-kpi-value {
+            font-size: 2rem;
+            line-height: 1.1;
+            color: #FFFFFF;
+            font-weight: 800;
+            margin-bottom: 0.45rem;
+        }
+        .report-kpi-caption {
+            font-size: 0.9rem;
+            line-height: 1.45;
+            color: #A5ACBA;
+        }
+        .report-kpi-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 150px;
+            padding: 0.55rem 1rem;
+            border-radius: 999px;
+            margin-top: 0.3rem;
+            font-size: 0.98rem;
+            font-weight: 700;
+            color: #F7FBF7;
+            background: linear-gradient(90deg, #5C9130 0%, #79A94A 100%);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+        }
+        .report-kpi-arc {
+            width: 165px;
+            height: 84px;
+            border-top-left-radius: 170px;
+            border-top-right-radius: 170px;
+            border: 16px solid rgba(187,212,66,0.55);
+            border-bottom: 0;
+            position: relative;
+            margin: 1rem auto 0.55rem auto;
+            box-sizing: border-box;
+        }
+        .report-kpi-arc::after {
+            content: "";
+            position: absolute;
+            width: 16px;
+            height: 4px;
+            border-radius: 999px;
+            background: #E9E15B;
+            right: 10px;
+            top: 20px;
+            transform: rotate(-30deg);
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+        }
+        .report-kpi-arc-label {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #F4F6FB;
+            margin: -0.15rem 0 0.55rem 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_report_top_header() -> None:
+    st.markdown(
+        """
+        <div class="report-top-hero">
+            <div class="report-top-title">
+                <div class="report-top-icon">📑</div>
+                <div class="report-top-heading">Relatórios Observacionais</div>
+            </div>
+            <div class="report-top-subheading">
+                Relatório consolidado por aluno, considerando o contexto da sessão monitorada, a disciplina, a turma e o professor.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_kpi_card(title: str, value: str, subtitle: str, orb_style: str, icon: str, is_last: bool = False) -> None:
+    extra_class = " last" if is_last else ""
+    st.markdown(
+        (
+            f"<div class='report-kpi-card{extra_class}'>"
+            f"<div class='report-kpi-orb' style='{orb_style}'>{html.escape(icon)}</div>"
+            f"<div class='report-kpi-title'>{html.escape(title)}</div>"
+            f"<div class='report-kpi-value'>{html.escape(value)}</div>"
+            f"<div class='report-kpi-caption'>{html.escape(subtitle)}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_predominant_behavior_card(behavior: str, share_label: str) -> None:
+    behavior_lower = (behavior or "").strip().lower()
+    if behavior_lower in {"dormindo", "distraido", "distraído", "agitado"}:
+        badge_background = "linear-gradient(90deg, #A93C3C 0%, #D05757 100%)"
+        arc_border = "rgba(217,102,102,0.78)"
+        arc_pointer = "#FFB0B0"
+    elif behavior_lower in {"perguntando", "em pé", "em pe"}:
+        badge_background = "linear-gradient(90deg, #83611D 0%, #B58B2A 100%)"
+        arc_border = "rgba(213,190,88,0.78)"
+        arc_pointer = "#F3E56C"
+    else:
+        badge_background = "linear-gradient(90deg, #5C9130 0%, #79A94A 100%)"
+        arc_border = "rgba(187,212,66,0.55)"
+        arc_pointer = "#E9E15B"
+
+    st.markdown(
+        (
+            "<div class='report-kpi-card'>"
+            f"<div class='report-kpi-arc' style='border-color:{arc_border}; border-bottom:0;'>"
+            f"<span style='position:absolute; width:16px; height:4px; border-radius:999px; background:{arc_pointer}; "
+            "right:10px; top:20px; transform:rotate(-30deg); box-shadow:0 0 0 1px rgba(255,255,255,0.06);'></span>"
+            "</div>"
+            f"<div class='report-kpi-arc-label'>{html.escape(behavior)}</div>"
+            "<div class='report-kpi-title'>Comportamento predominante</div>"
+            f"<div class='report-kpi-badge' style='background:{badge_background};'>{html.escape(behavior)}</div>"
+            f"<div class='report-kpi-caption' style='margin-top:0.65rem;'>{html.escape(share_label)}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def _build_quick_insights(report_data: dict) -> dict[str, str]:
     summary_df = report_data["behavior_summary"]
     consistency_df = report_data["behavior_consistency"]
@@ -475,10 +694,8 @@ def _build_quick_insights(report_data: dict) -> dict[str, str]:
 
 
 def render_report_page(user_context: dict):
-    st.title("📑 Relatórios Observacionais")
-    st.caption(
-        "Relatório consolidado por aluno, considerando o contexto da sessão monitorada, a disciplina, a turma e o professor."
-    )
+    _inject_report_top_styles()
+    _render_report_top_header()
 
     base_options = get_available_filters(user_context)
     students_df = base_options["students"]
@@ -486,81 +703,84 @@ def render_report_page(user_context: dict):
         st.warning("Não há episódios comportamentais registrados para gerar relatórios.")
         return
 
-    controls_col1, controls_col2, controls_col3, controls_col4 = st.columns([2, 2, 2, 2])
-    with controls_col1:
-        selected_teacher_id = None
-        if user_context["role"] == "admin" and not base_options["teachers"].empty:
-            teacher_map = {int(row["id"]): row["nome"] for _, row in base_options["teachers"].iterrows()}
-            teacher_choice = st.selectbox("Professor", ["Todos"] + list(teacher_map.values()), index=0)
-            if teacher_choice != "Todos":
-                selected_teacher_id = next(key for key, value in teacher_map.items() if value == teacher_choice)
-        else:
-            st.text_input("Professor", value=user_context["name"], disabled=True)
-    with controls_col2:
-        options_after_teacher = get_available_filters(
-            user_context,
-            filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
-        )
-        subject_map = {int(row["id"]): row["nome"] for _, row in options_after_teacher["subjects"].iterrows()}
-        subject_choice = st.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
-        selected_subject_id = None
-        if subject_choice != "Todas":
-            selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
-    with controls_col3:
-        options_after_subject = get_available_filters(
-            user_context,
-            filters={
-                "teacher_id": selected_teacher_id,
-                "subject_id": selected_subject_id,
-            },
-        )
-        class_map = {
-            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-            for _, row in options_after_subject["classes"].iterrows()
-        }
-        class_choice = st.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
-        selected_class_id = None
-        if class_choice != "Todas":
-            selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
-    with controls_col4:
-        filtered_students_df = get_available_students(
-            user_context,
-            filters={
-                "teacher_id": selected_teacher_id,
-                "subject_id": selected_subject_id,
-                "class_id": selected_class_id,
-            },
-        )
-        student_options = filtered_students_df["student"].tolist()
-        if not student_options:
-            st.warning("Não há alunos com episódios para os filtros selecionados.")
-            return
-        selected_student = st.selectbox("Aluno", student_options, index=0)
+    with st.container(border=True):
+        st.markdown("<div class='report-panel-title'>Filtros do relatório</div>", unsafe_allow_html=True)
 
-    controls_col5, controls_col6 = st.columns([1, 2])
-    with controls_col5:
-        period_mode = st.selectbox("Período", ["Diário", "Semanal", "Mensal"], index=0)
-    with controls_col6:
-        start_default, end_default = _default_range(period_mode)
-        student_last_date = _get_student_last_date(filtered_students_df, selected_student)
-        if period_mode == "Diário":
-            selected_date = st.date_input("Data de referência", value=student_last_date or end_default)
-            start_date = selected_date
-            end_date = selected_date
-        else:
-            selected_range = st.date_input(
-                "Intervalo de datas",
-                value=(
-                    start_default,
-                    student_last_date or end_default,
-                ),
+        controls_col1, controls_col2, controls_col3, controls_col4 = st.columns([2, 2, 2, 2])
+        with controls_col1:
+            selected_teacher_id = None
+            if user_context["role"] == "admin" and not base_options["teachers"].empty:
+                teacher_map = {int(row["id"]): row["nome"] for _, row in base_options["teachers"].iterrows()}
+                teacher_choice = st.selectbox("Professor", ["Todos"] + list(teacher_map.values()), index=0)
+                if teacher_choice != "Todos":
+                    selected_teacher_id = next(key for key, value in teacher_map.items() if value == teacher_choice)
+            else:
+                st.text_input("Professor", value=user_context["name"], disabled=True)
+        with controls_col2:
+            options_after_teacher = get_available_filters(
+                user_context,
+                filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
             )
-
-            if not isinstance(selected_range, (list, tuple)) or len(selected_range) != 2:
-                st.info("Selecione uma data inicial e uma data final para gerar o relatório.")
+            subject_map = {int(row["id"]): row["nome"] for _, row in options_after_teacher["subjects"].iterrows()}
+            subject_choice = st.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
+            selected_subject_id = None
+            if subject_choice != "Todas":
+                selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
+        with controls_col3:
+            options_after_subject = get_available_filters(
+                user_context,
+                filters={
+                    "teacher_id": selected_teacher_id,
+                    "subject_id": selected_subject_id,
+                },
+            )
+            class_map = {
+                int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+                for _, row in options_after_subject["classes"].iterrows()
+            }
+            class_choice = st.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
+            selected_class_id = None
+            if class_choice != "Todas":
+                selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
+        with controls_col4:
+            filtered_students_df = get_available_students(
+                user_context,
+                filters={
+                    "teacher_id": selected_teacher_id,
+                    "subject_id": selected_subject_id,
+                    "class_id": selected_class_id,
+                },
+            )
+            student_options = filtered_students_df["student"].tolist()
+            if not student_options:
+                st.warning("Não há alunos com episódios para os filtros selecionados.")
                 return
+            selected_student = st.selectbox("Aluno", student_options, index=0)
 
-            start_date, end_date = selected_range
+        controls_col5, controls_col6 = st.columns([1, 1])
+        with controls_col5:
+            period_mode = st.selectbox("Período", ["Diário", "Semanal", "Mensal"], index=0)
+        with controls_col6:
+            start_default, end_default = _default_range(period_mode)
+            student_last_date = _get_student_last_date(filtered_students_df, selected_student)
+            if period_mode == "Diário":
+                selected_date = st.date_input("Data de referência", value=student_last_date or end_default)
+                start_date = selected_date
+                end_date = selected_date
+            else:
+                selected_range = st.date_input(
+                    "Intervalo de datas",
+                    value=(
+                        start_default,
+                        student_last_date or end_default,
+                    ),
+                )
+
+                if not isinstance(selected_range, (list, tuple)) or len(selected_range) != 2:
+                    st.info("Selecione uma data inicial e uma data final para gerar o relatório.")
+                    return
+
+                start_date, end_date = selected_range
 
     if start_date > end_date:
         st.error("A data inicial não pode ser maior que a data final.")
@@ -609,11 +829,50 @@ def render_report_page(user_context: dict):
     peak_days_display = _build_peak_days_display(report_data["peak_days"])
     quick_insights = _build_quick_insights(report_data)
 
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-    metric_col1.metric("Episódios", metrics["total_records"])
-    metric_col2.metric("Dias com registros", metrics["active_days"])
-    metric_col3.metric("Comportamento predominante", metrics["predominant_behavior"])
-    metric_col4.metric("Duração acumulada", format_duration_human(metrics["total_duration_seconds"]))
+    predominant_share = float(summary_df.iloc[0]["duration_percentage"]) if not summary_df.empty else 0.0
+    total_records_subtitle = (
+        f"{metrics['total_records']} episódio registrado"
+        if metrics["total_records"] == 1
+        else f"{metrics['total_records']} episódios registrados"
+    )
+    active_days_subtitle = (
+        f"{metrics['active_days']} dia com registros"
+        if metrics["active_days"] == 1
+        else f"{metrics['active_days']} dias com registros"
+    )
+
+    with st.container(border=True):
+        metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+        with metric_col1:
+            _render_kpi_card(
+                "Episódios",
+                str(metrics["total_records"]),
+                total_records_subtitle,
+                "background: radial-gradient(circle at 32% 28%, #5F90D2 0%, #426CA8 58%, #35527F 100%);",
+                "📄",
+            )
+        with metric_col2:
+            _render_kpi_card(
+                "Dias com registros",
+                str(metrics["active_days"]),
+                active_days_subtitle,
+                "background: radial-gradient(circle at 32% 28%, #88B85A 0%, #68983F 58%, #4E7730 100%);",
+                "🗓",
+            )
+        with metric_col3:
+            _render_predominant_behavior_card(
+                str(metrics["predominant_behavior"]),
+                f"({predominant_share:.0f}% da duração total)",
+            )
+        with metric_col4:
+            _render_kpi_card(
+                "Duração acumulada",
+                format_duration_human(metrics["total_duration_seconds"]),
+                "Tempo total registrado",
+                "background: radial-gradient(circle at 32% 28%, #F1B24D 0%, #E8962F 58%, #C9771B 100%);",
+                "🕒",
+                is_last=True,
+            )
     st.divider()
 
     fig_occurrence = px.pie(
