@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from services.report_service import generate_report_data, get_available_students
+from services.report_service import generate_report_data, get_available_filters, get_available_students
 from utils.report_formatters import (
     build_limitations_text,
     build_observational_summary,
@@ -474,27 +474,75 @@ def _build_quick_insights(report_data: dict) -> dict[str, str]:
     }
 
 
-def render_report_page():
+def render_report_page(user_context: dict):
     st.title("📑 Relatórios Observacionais")
     st.caption(
-        "Relatório consolidado por aluno, com foco em padrões observados, frequência registrada e distribuição temporal."
+        "Relatório consolidado por aluno, considerando o contexto da sessão monitorada, a disciplina, a turma e o professor."
     )
 
-    students_df = get_available_students()
+    base_options = get_available_filters(user_context)
+    students_df = base_options["students"]
     if students_df.empty:
         st.warning("Não há episódios comportamentais registrados para gerar relatórios.")
         return
 
-    student_options = students_df["student"].tolist()
-
-    controls_col1, controls_col2, controls_col3 = st.columns([2, 1, 2])
+    controls_col1, controls_col2, controls_col3, controls_col4 = st.columns([2, 2, 2, 2])
     with controls_col1:
-        selected_student = st.selectbox("Aluno", student_options, index=0)
+        selected_teacher_id = None
+        if user_context["role"] == "admin" and not base_options["teachers"].empty:
+            teacher_map = {int(row["id"]): row["nome"] for _, row in base_options["teachers"].iterrows()}
+            teacher_choice = st.selectbox("Professor", ["Todos"] + list(teacher_map.values()), index=0)
+            if teacher_choice != "Todos":
+                selected_teacher_id = next(key for key, value in teacher_map.items() if value == teacher_choice)
+        else:
+            st.text_input("Professor", value=user_context["name"], disabled=True)
     with controls_col2:
-        period_mode = st.selectbox("Período", ["Diário", "Semanal", "Mensal"], index=0)
+        options_after_teacher = get_available_filters(
+            user_context,
+            filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
+        )
+        subject_map = {int(row["id"]): row["nome"] for _, row in options_after_teacher["subjects"].iterrows()}
+        subject_choice = st.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
+        selected_subject_id = None
+        if subject_choice != "Todas":
+            selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
     with controls_col3:
+        options_after_subject = get_available_filters(
+            user_context,
+            filters={
+                "teacher_id": selected_teacher_id,
+                "subject_id": selected_subject_id,
+            },
+        )
+        class_map = {
+            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+            for _, row in options_after_subject["classes"].iterrows()
+        }
+        class_choice = st.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
+        selected_class_id = None
+        if class_choice != "Todas":
+            selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
+    with controls_col4:
+        filtered_students_df = get_available_students(
+            user_context,
+            filters={
+                "teacher_id": selected_teacher_id,
+                "subject_id": selected_subject_id,
+                "class_id": selected_class_id,
+            },
+        )
+        student_options = filtered_students_df["student"].tolist()
+        if not student_options:
+            st.warning("Não há alunos com episódios para os filtros selecionados.")
+            return
+        selected_student = st.selectbox("Aluno", student_options, index=0)
+
+    controls_col5, controls_col6 = st.columns([1, 2])
+    with controls_col5:
+        period_mode = st.selectbox("Período", ["Diário", "Semanal", "Mensal"], index=0)
+    with controls_col6:
         start_default, end_default = _default_range(period_mode)
-        student_last_date = _get_student_last_date(students_df, selected_student)
+        student_last_date = _get_student_last_date(filtered_students_df, selected_student)
         if period_mode == "Diário":
             selected_date = st.date_input("Data de referência", value=student_last_date or end_default)
             start_date = selected_date
@@ -519,16 +567,22 @@ def render_report_page():
         return
 
     report_data = generate_report_data(
-        student=selected_student,
-        start_date=start_date,
-        end_date=end_date,
+        user_context=user_context,
+        filters={
+            "teacher_id": selected_teacher_id,
+            "subject_id": selected_subject_id,
+            "class_id": selected_class_id,
+            "student_name": selected_student,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
         period_mode=period_mode,
     )
 
     episodes = report_data["episodes"]
     if episodes.empty:
         if period_mode == "Diário":
-            last_available_date = _get_student_last_date(students_df, selected_student)
+            last_available_date = _get_student_last_date(filtered_students_df, selected_student)
             if last_available_date and last_available_date != start_date:
                 st.warning(
                     "Não há registros para o aluno na data selecionada. "

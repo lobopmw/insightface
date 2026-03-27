@@ -5,7 +5,7 @@ from typing import Dict
 
 import pandas as pd
 
-from repositories.report_repository import fetch_behavior_episodes, list_report_students
+from repositories.report_repository import fetch_behavior_episodes, list_report_filter_options, list_report_students
 
 
 TIME_BUCKETS = [
@@ -47,8 +47,12 @@ def _segment_within_day(relative_position: float) -> str:
     return "Não classificado"
 
 
-def get_available_students() -> pd.DataFrame:
-    return list_report_students()
+def get_available_filters(user_context: dict, filters: dict | None = None) -> dict[str, pd.DataFrame]:
+    return list_report_filter_options(user_context, filters=filters)
+
+
+def get_available_students(user_context: dict, filters: dict | None = None) -> pd.DataFrame:
+    return list_report_students(user_context, filters=filters)
 
 
 def _prepare_episodes(df: pd.DataFrame) -> pd.DataFrame:
@@ -329,11 +333,15 @@ def _build_headline_metrics(df: pd.DataFrame, behavior_summary: pd.DataFrame) ->
     }
 
 
-def generate_report_data(student: str, start_date, end_date, period_mode: str) -> Dict[str, object]:
-    current_df = _prepare_episodes(fetch_behavior_episodes(student, start_date, end_date))
+def generate_report_data(user_context: dict, filters: dict, period_mode: str) -> Dict[str, object]:
+    current_filters = dict(filters)
+    current_df = _prepare_episodes(fetch_behavior_episodes(user_context, current_filters))
 
-    previous_start, previous_end = _build_previous_period(start_date, end_date)
-    previous_df = _prepare_episodes(fetch_behavior_episodes(student, previous_start, previous_end))
+    previous_start, previous_end = _build_previous_period(filters["start_date"], filters["end_date"])
+    previous_filters = dict(filters)
+    previous_filters["start_date"] = previous_start
+    previous_filters["end_date"] = previous_end
+    previous_df = _prepare_episodes(fetch_behavior_episodes(user_context, previous_filters))
 
     current_summary = _build_behavior_summary(current_df)
     previous_summary = _build_behavior_summary(previous_df)
@@ -348,10 +356,10 @@ def generate_report_data(student: str, start_date, end_date, period_mode: str) -
     behavior_consistency = _build_behavior_consistency(daily_distribution, headline_metrics["active_days"])
 
     return {
-        "student": student,
+        "student": filters.get("student_name"),
         "period_mode": period_mode,
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": filters["start_date"],
+        "end_date": filters["end_date"],
         "previous_start_date": previous_start,
         "previous_end_date": previous_end,
         "episodes": current_df,

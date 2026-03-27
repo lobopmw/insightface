@@ -1,5 +1,4 @@
 
-import base64
 import os
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
@@ -13,10 +12,26 @@ import numpy as np
 import time
 import torch
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import timedelta
 import datetime
-from control_database_postgres import insert_behavior_episode, df_behavior_charts, show_behavior_charts
+from control_database_postgres import (
+    DEFAULT_SCHOOL_NAME,
+    SESSION_STATUS_OPEN,
+    SESSION_STATUS_CLOSED,
+    close_monitoring_session,
+    create_monitoring_session,
+    get_monitoring_session_summary,
+    get_student_lookup_for_scope,
+    insert_behavior_episode,
+    list_classes_for_user,
+    list_students_for_user,
+    list_subjects_for_user,
+    professor_has_assignment,
+    show_behavior_charts,
+    upsert_student,
+)
 from register_face_multi_images_avg import load_insightface_data
 from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image
@@ -44,6 +59,7 @@ YAW_LATERAL_THRESH = 28.0
 
 RELAY_HOST = os.getenv("RELAY_HOST", "127.0.0.1")
 RELAY_PORT = int(os.getenv("RELAY_PORT", "5555"))
+RELAY_HTTP_PORT = int(os.getenv("RELAY_HTTP_PORT", "8555"))
 
 
 # Paths
@@ -143,8 +159,120 @@ def teardown_monitor_runtime():
     build_monitor_runtime.clear()
 
 
-@st.fragment(run_every=0.15)
-def render_monitor_fragment(
+def _render_live_video_stream(height: int = 720):
+    components.html(
+        f"""
+        <div style="width:100%;">
+          <img id="live-monitor-stream"
+               alt="Vídeo de monitoramento ao vivo"
+               style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid rgba(255,255,255,0.08); background:#05070d;" />
+        </div>
+        <script>
+          (function() {{
+            const img = document.getElementById("live-monitor-stream");
+            const host = window.location.hostname || "localhost";
+            const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+            const streamUrl = `${{protocol}}//${{host}}:{RELAY_HTTP_PORT}/mjpeg`;
+            if (img.dataset.src !== streamUrl) {{
+              img.dataset.src = streamUrl;
+              img.src = streamUrl;
+            }}
+          }})();
+        </script>
+        """,
+        height=height + 12,
+    )
+
+
+def _friendly_session_status(status: str | None) -> str:
+    normalized = (status or "").strip().lower()
+    if normalized == SESSION_STATUS_OPEN:
+        return "Em andamento"
+    if normalized == SESSION_STATUS_CLOSED:
+        return "Encerrado"
+    return "Não iniciado"
+
+
+def _status_badge_markup(status: str | None) -> str:
+    palette = {
+        "Não iniciado": ("#9AA0AA", "rgba(154,160,170,0.14)", "rgba(154,160,170,0.35)"),
+        "Em andamento": ("#3DDC97", "rgba(61,220,151,0.14)", "rgba(61,220,151,0.35)"),
+        "Encerrado": ("#E57373", "rgba(229,115,115,0.14)", "rgba(229,115,115,0.35)"),
+    }
+    normalized = status if status in palette else _friendly_session_status(status)
+    fg, bg, border = palette[normalized]
+    return (
+        f"<span style='display:inline-flex; align-items:center; padding:0.22rem 0.7rem; "
+        f"border-radius:999px; border:1px solid {border}; background:{bg}; color:{fg}; "
+        f"font-size:0.85rem; font-weight:600;'>{normalized}</span>"
+    )
+
+
+def _format_datetime_br(value) -> str:
+    if not value:
+        return "-"
+    return pd.to_datetime(value).strftime("%H:%M:%S")
+
+
+def _format_duration_label(delta: datetime.timedelta | None) -> str:
+    if delta is None:
+        return "-"
+    total_seconds = max(0, int(delta.total_seconds()))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _render_context_card(session_state_label: str, selected_subject_label: str, selected_class_label: str, session_data=None):
+    start_time = None if not session_data else pd.to_datetime(session_data.get("start_time")) if session_data.get("start_time") else None
+    end_time = None if not session_data else pd.to_datetime(session_data.get("end_time")) if session_data.get("end_time") else None
+
+    elapsed_delta = None
+    total_delta = None
+    if start_time is not None:
+        if session_state_label == "Em andamento":
+            elapsed_delta = pd.Timestamp.now().to_pydatetime() - start_time.to_pydatetime()
+        elif end_time is not None:
+            total_delta = end_time.to_pydatetime() - start_time.to_pydatetime()
+
+    rows = [
+        ("Disciplina", selected_subject_label or "-"),
+        ("Turma", selected_class_label or "-"),
+        ("Sessão ativa", f"ID da sessão: {session_data['id']}" if session_data and session_state_label == "Em andamento" else "-"),
+        ("Início", _format_datetime_br(start_time)),
+    ]
+    if session_state_label == "Em andamento":
+        rows.append(("Tempo decorrido", _format_duration_label(elapsed_delta)))
+    elif session_state_label == "Encerrado":
+        rows.append(("Término", _format_datetime_br(end_time)))
+        rows.append(("Duração total", _format_duration_label(total_delta)))
+
+    lines = [
+        "<div style='border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:1rem 1rem 0.85rem 1rem;"
+        "background:rgba(255,255,255,0.02);'>",
+        "<div style='display:flex; align-items:center; justify-content:space-between; gap:0.75rem; margin-bottom:0.9rem;'>",
+        "<div style='font-size:1rem; font-weight:700;'>Contexto da Aula</div>",
+        _status_badge_markup(session_state_label),
+        "</div>",
+    ]
+    for label, value in rows:
+        lines.append(
+            "<div style='margin-bottom:0.75rem;'>"
+            f"<div style='font-size:0.78rem; color:#9aa0aa; margin-bottom:0.18rem;'>{label}</div>"
+            f"<div style='font-size:1.05rem; font-weight:600;'>{value}</div>"
+            "</div>"
+        )
+    lines.append("</div>")
+    st.markdown("".join(lines), unsafe_allow_html=True)
+
+
+@st.fragment(run_every=1.0)
+def render_context_fragment(session_state_label: str, selected_subject_label: str, selected_class_label: str, session_data=None):
+    _render_context_card(session_state_label, selected_subject_label, selected_class_label, session_data)
+
+
+@st.fragment(run_every=0.6)
+def process_monitor_fragment(
     school: str,
     discipline: str,
     user_name: str,
@@ -153,7 +281,6 @@ def render_monitor_fragment(
     debug_font: float,
     box_margin_ratio: float,
 ):
-    stframe = st.empty()
     status_placeholder = st.empty()
     runtime = st.session_state.get("monitor_runtime")
     video_stream = None if runtime is None else runtime.get("video_stream")
@@ -161,6 +288,7 @@ def render_monitor_fragment(
     episode_manager = st.session_state.get("episode_manager")
     known_face_encodings_norm = None if runtime is None else runtime.get("known_face_encodings_norm")
     known_face_names = [] if runtime is None else runtime.get("known_face_names", [])
+    student_lookup = st.session_state.get("student_lookup", {})
 
     frame = None
     frame_id = 0
@@ -195,15 +323,12 @@ def render_monitor_fragment(
                 ]
             )
         )
-        last_display_frame = st.session_state.get("monitor_last_display_frame")
-        if last_display_frame is not None:
-            stframe.image(last_display_frame, channels="BGR", width="stretch")
         if waited > 10:
             status_placeholder.error(
                 "O app conectou no relay, mas nao recebeu frame util a tempo. "
                 "Valide os logs do container `relay` e a estabilidade do RTSP."
             )
-        return
+        return False
 
     st.session_state["monitor_waiting_since"] = time.time()
     status_placeholder.empty()
@@ -319,10 +444,11 @@ def render_monitor_fragment(
 
                 if name_student != "Desconhecido" and episode_manager is not None:
                     now_dt = datetime.datetime.now()
+                    student_record = student_lookup.get(name_student, {})
                     episode_manager.update_behavior(
                         student_key=name_student,
                         student_name=name_student,
-                        student_id=None,
+                        student_id=student_record.get("id"),
                         behavior=current_behavior,
                         timestamp=now_dt,
                         school=school,
@@ -368,9 +494,10 @@ def render_monitor_fragment(
                         cv2.putText(frame, text, (10, y0 + int(i * 22 * debug_font)),
                                     cv2.FONT_HERSHEY_SIMPLEX, debug_font, (255, 255, 0), 2)
 
-    disp = cv2.resize(frame, (960, 540))
-    st.session_state["monitor_last_display_frame"] = disp
-    stframe.image(disp, channels="BGR", width="stretch")
+    last_rendered_frame_id = st.session_state.get("monitor_last_rendered_frame_id", -1)
+    if frame_id != last_rendered_frame_id:
+        st.session_state["monitor_last_rendered_frame_id"] = frame_id
+    return True
 
 # ---------------- Associação por IoU + memória curta de nome ----------------
 def iou(a, b):
@@ -633,28 +760,33 @@ def criptografar_nome_matricula(nome, matricula):
 
 # ------------------------------ APP ------------------------------
 def recognition_behavior():
-    school = "Escola Estadual Criança Esperança"
-    discipline = "Matemática"
+    school = DEFAULT_SCHOOL_NAME
 
     st.sidebar.image(image_path_classroom, width="stretch")
-    user_name = st.session_state.get("name", "Usuário")
+    user_context = st.session_state.get("user_context") or {}
+    user_name = user_context.get("name", st.session_state.get("name", "Usuário"))
+    user_role = user_context.get("role", st.session_state.get("role", "professor"))
     st.sidebar.markdown(f"**{user_name}**")
+    st.sidebar.caption(f"Perfil: {user_role}")
 
     if st.sidebar.button("Sair"):
-        for key in ("authenticated", "cpf", "name", "city", "state"):
+        for key in ("authenticated", "cpf", "name", "city", "state", "role"):
             if key in st.query_params:
                 del st.query_params[key]
         st.session_state.clear()
         st.rerun()
 
-    menu_option = st.sidebar.radio(
-        "Menu",
-        ["Cadastro de Alunos", "Monitoramento", "Gráficos", "Relatórios"],
-    )
+    teacher_menu = ["Cadastro de Alunos", "Monitoramento", "Gráficos", "Relatórios"]
+    admin_menu = ["Gráficos", "Relatórios"]
+    menu_option = st.sidebar.radio("Menu", admin_menu if user_role == "admin" else teacher_menu)
 
     # ------------------ CADASTRO ------------------
     if menu_option == "Cadastro de Alunos":
         st.title("📸 Cadastro de Alunos")
+        allowed_classes_df = list_classes_for_user(user_context)
+        if allowed_classes_df.empty:
+            st.warning("Nenhuma turma vinculada ao professor foi encontrada. Cadastre os vínculos no banco antes de usar esta tela.")
+            return
 
         # Parâmetros da captura automática
         IMAGENS_POR_POSE = st.number_input("Imagens por pose", 1, 30, 10, 1)
@@ -697,13 +829,18 @@ def recognition_behavior():
             st.stop()
 
         # Entradas
-        disciplinas = ["Matemática", "Português", "História", "Geografia", "Ciências"]
-        _ = st.selectbox("📘 Selecione a Disciplina:", disciplinas)
+        class_options = {
+            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+            for _, row in allowed_classes_df.iterrows()
+        }
+        selected_class_label = st.selectbox("👥 Selecione a Turma:", list(class_options.values()))
+        selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
         nome_aluno  = st.text_input("Nome do Aluno:", key="cad_nome")
         matricula   = st.text_input("Matrícula do Aluno:", key="cad_matricula")
 
         if nome_aluno and matricula:
             nome_criptografado = salvar_mapeamento(nome_aluno, matricula)
+            upsert_student(nome_criptografado, nome_aluno.strip(), str(matricula).strip(), selected_class_id)
 
             os.makedirs(DATABASE_PATH, exist_ok=True)
             pasta_base = os.path.join(DATABASE_PATH, nome_criptografado)
@@ -829,21 +966,60 @@ def recognition_behavior():
                 if ret:
                     stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width=480)
         else:
-            st.warning("Preencha a disciplina, nome e matrícula do aluno para iniciar a captura.")
+            st.warning("Preencha a turma, o nome e a matrícula do aluno para iniciar a captura.")
 
     # ------------------ MONITORAMENTO ------------------
     elif menu_option == "Monitoramento":
-        # Fecha webcam de cadastro se aberta
         if 'cadastro_cap' in st.session_state:
             try: st.session_state.cadastro_cap.release()
             except: pass
             del st.session_state['cadastro_cap']
 
-        col_img1, col_img2, _ = st.columns([1,4,1])
-        with col_img1:
-            st.image(image_path_cam, width=200)
-        with col_img2:
-            st.title("MONITORAMENTO")
+        st.markdown(
+            """
+            <style>
+            .monitor-page-title {
+                margin: 0.15rem 0 0 0;
+                font-size: 2.15rem;
+                line-height: 1.05;
+                font-weight: 800;
+                letter-spacing: 0.01em;
+            }
+            .monitor-header-wrap {
+                margin-bottom: 0.7rem;
+            }
+            .monitor-layout {
+                margin-top: 0.15rem;
+            }
+            .monitor-layout [data-testid="column"] > div {
+                height: 100%;
+            }
+            .monitor-right-panel {
+                margin-top: -10.8rem;
+            }
+            .monitor-section-title {
+                margin: 0;
+                font-size: 1.38rem;
+                line-height: 1.15;
+                font-weight: 700;
+            }
+            .monitor-live-badge-row {
+                display: flex;
+                justify-content: center;
+                margin: 0.3rem 0 0.55rem 0;
+            }
+            .monitor-video-shell {
+                margin-top: -0.15rem;
+            }
+            @media (max-width: 1100px) {
+                .monitor-right-panel {
+                    margin-top: 0;
+                }
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
         CONFIDENCE_THRESHOLD = st.sidebar.slider("Confiança Mínima", 0.10, 0.80, 0.35, 0.05)
         use_gpu = st.sidebar.checkbox("Usar GPU (CUDA)", value=True)
@@ -884,272 +1060,250 @@ def recognition_behavior():
         # HUD de debug no canto esquerdo
         show_debug = st.sidebar.toggle("Mostrar debug (Dormindo)", value=False)
         debug_font = st.sidebar.slider("Tamanho fonte debug", 0.4, 2.0, 0.8, 0.1)
-
-        col1, col2 = st.sidebar.columns(2)
-        run_system = col1.button("Iniciar Monitoramento")
-        stop_system = col2.button("Parar Monitoramento")
-
         BOX_MARGIN_RATIO = 0.2
+        if user_role != "professor":
+            st.info("O monitoramento operacional está disponível apenas para o perfil professor.")
+            return
 
-        if "monitor_runtime" in st.session_state:
-            teardown_monitor_runtime()
-            st.session_state.pop("monitor_waiting_since", None)
-            st.session_state.pop("monitor_last_display_frame", None)
-            st.session_state.pop("monitor_last_detector_frame_id", None)
+        subjects_df = list_subjects_for_user(user_context)
+        if subjects_df.empty:
+            st.warning("Nenhuma disciplina vinculada ao professor foi encontrada. Cadastre os vínculos no banco antes de iniciar o monitoramento.")
+            return
 
-        if "video_stream" in st.session_state:
-            try:
-                st.session_state.video_stream.stop()
-            except Exception:
-                pass
-            del st.session_state["video_stream"]
+        monitor_state = st.session_state.setdefault("monitoring_state", {})
+        current_session_id = monitor_state.get("session_id")
+        current_session_preview = get_monitoring_session_summary(current_session_id) if current_session_id else None
+        header_is_live = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
+        selected_subject_id = monitor_state.get("selected_subject_id")
+        selected_class_id = monitor_state.get("selected_class_id")
 
-        messege = st.empty()
-        if not run_system and not stop_system:
-            messege.info("Obs: O sistema irá monitorar os comportamentos dos alunos durante a aula. Inicie o monitoramento!")
+        st.markdown("<div class='monitor-header-wrap'>", unsafe_allow_html=True)
+        col_img1, col_img2, _ = st.columns([0.9, 4.1, 1], gap="small")
+        with col_img1:
+            st.image(image_path_cam, width=168)
+        with col_img2:
+            if header_is_live:
+                st.markdown(
+                    """
+                    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-top:0.15rem;">
+                      <div class='monitor-page-title' style="margin:0;">Vídeo de Monitoramento</div>
+                      <span style='display:inline-flex; align-items:center; gap:0.35rem; padding:0.22rem 0.72rem;
+                      border-radius:999px; background:rgba(61,220,151,0.14); border:1px solid rgba(61,220,151,0.35);
+                      color:#3DDC97; font-size:0.82rem; font-weight:700;'>AO VIVO</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown("<div class='monitor-page-title'>Monitoramento da Aula</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        last_closed_session = st.session_state.get("last_closed_monitoring_session")
+        st.markdown("<div class='monitor-layout'>", unsafe_allow_html=True)
+        monitor_left_col, monitor_right_col = st.columns([1.08, 2.42], gap="large")
+        with monitor_left_col:
+            subject_options = {int(row["id"]): row["nome"] for _, row in subjects_df.iterrows()}
+            default_subject_index = 0
+            if selected_subject_id in subject_options:
+                default_subject_index = list(subject_options.keys()).index(selected_subject_id)
+            disable_scope_inputs = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
+            selected_subject_label = st.selectbox(
+                "Disciplina da aula",
+                list(subject_options.values()),
+                index=default_subject_index,
+                disabled=disable_scope_inputs,
+            )
+            selected_subject_id = next(key for key, value in subject_options.items() if value == selected_subject_label)
+            monitor_state["selected_subject_id"] = selected_subject_id
+
+            classes_df = list_classes_for_user(user_context, selected_subject_id)
+            if classes_df.empty:
+                st.warning("Nenhuma turma vinculada à disciplina selecionada foi encontrada para este professor.")
+                return
+
+            class_options = {
+                int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+                for _, row in classes_df.iterrows()
+            }
+            default_class_index = 0
+            if selected_class_id in class_options:
+                default_class_index = list(class_options.keys()).index(selected_class_id)
+            selected_class_label = st.selectbox(
+                "Turma acompanhada",
+                list(class_options.values()),
+                index=default_class_index,
+                disabled=disable_scope_inputs,
+            )
+            selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
+            monitor_state["selected_class_id"] = selected_class_id
+
+            if not professor_has_assignment(user_context["teacher_id"], selected_subject_id, selected_class_id):
+                st.error("O professor autenticado não possui vínculo com a disciplina e a turma selecionadas.")
+                return
+
+            current_session_id = monitor_state.get("session_id")
+            current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
+            if current_session and current_session["status"] == SESSION_STATUS_OPEN:
+                ui_state = "Em andamento"
+            elif last_closed_session:
+                ui_state = "Encerrado"
+            else:
+                ui_state = "Não iniciado"
+
+            if ui_state == "Em andamento":
+                session_panel = current_session
+            elif ui_state == "Encerrado":
+                session_panel = last_closed_session
+            else:
+                session_panel = None
+
+            st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
+            if ui_state == "Em andamento":
+                render_context_fragment(ui_state, selected_subject_label, selected_class_label, session_panel)
+            else:
+                _render_context_card(ui_state, selected_subject_label, selected_class_label, session_panel)
+            st.markdown("<div style='height:0.85rem;'></div>", unsafe_allow_html=True)
+
+            if ui_state == "Não iniciado":
+                run_system = st.button("Iniciar monitoramento", type="primary", use_container_width=True)
+                stop_system = False
+            elif ui_state == "Em andamento":
+                run_system = False
+                stop_system = st.button("Encerrar monitoramento", use_container_width=True)
+            else:
+                run_system = st.button("Iniciar nova sessão", type="primary", use_container_width=True)
+                stop_system = False
+
+        current_session_id = monitor_state.get("session_id")
+        current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
 
         if run_system:
-            messege.empty()
-            stframe = st.empty()
-            fps_limit = 12
-            prev_time = 0.0
-
-            model = YOLO('yolo11m-pose.pt')
-            if device == "cuda":
-                model_face = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider","CPUExecutionProvider"])
-                model_face.prepare(ctx_id=0, det_size=(832,832))
-            else:
-                model_face = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-                model_face.prepare(ctx_id=-1, det_size=(832,832))
-
-            known_face_encodings, known_face_names = load_insightface_data()
-            known_face_encodings_norm = (
-                known_face_encodings / (np.linalg.norm(known_face_encodings, axis=1, keepdims=True) + 1e-6)
-            ) if len(known_face_encodings) > 0 else None
-
-            episode_manager = BehaviorEpisodeManager(
-                persist_callback=insert_behavior_episode,
+            session_id = create_monitoring_session(
+                user_context["teacher_id"],
+                selected_subject_id,
+                selected_class_id,
+            )
+            session_summary = get_monitoring_session_summary(session_id)
+            st.session_state["student_lookup"] = get_student_lookup_for_scope(user_context)
+            st.session_state["monitoring_state"] = {
+                "session_id": session_id,
+                "selected_subject_id": selected_subject_id,
+                "selected_class_id": selected_class_id,
+            }
+            st.session_state.pop("last_closed_monitoring_session", None)
+            st.session_state["episode_manager"] = BehaviorEpisodeManager(
+                persist_callback=lambda **kwargs: insert_behavior_episode(
+                    monitoring_session_id=session_id,
+                    student_id=kwargs.get("id_student"),
+                    school=school,
+                    discipline=session_summary["subject_name"],
+                    teacher=user_name,
+                    id_student=kwargs.get("id_student"),
+                    student=kwargs.get("student"),
+                    behavior=kwargs.get("behavior"),
+                    start_time=kwargs.get("start_time"),
+                    end_time=kwargs.get("end_time"),
+                    source=kwargs.get("source", "realtime"),
+                ),
                 stability_seconds=2.0,
                 stability_frames=15,
             )
+            st.session_state["monitor_runtime"] = build_monitor_runtime(device, RELAY_HOST, RELAY_PORT)
+            st.session_state.pop("monitor_waiting_since", None)
+            st.session_state.pop("monitor_last_display_frame", None)
+            st.session_state.pop("monitor_last_detector_frame_id", None)
+            st.session_state.pop("monitor_last_rendered_frame_id", None)
+            st.rerun()
 
-            video_stream = VideoStream((RELAY_HOST, RELAY_PORT)).start()
-            st.session_state.video_stream = video_stream
+        monitor_state = st.session_state.get("monitoring_state", {})
+        current_session_id = monitor_state.get("session_id")
+        current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
 
-            t0 = time.time()
-            while time.time() - t0 < 0.3:
-                _ = video_stream.read()
+        if current_session and "monitor_runtime" not in st.session_state:
+            st.session_state["student_lookup"] = get_student_lookup_for_scope(user_context)
+            if "episode_manager" not in st.session_state:
+                st.session_state["episode_manager"] = BehaviorEpisodeManager(
+                    persist_callback=lambda **kwargs: insert_behavior_episode(
+                        monitoring_session_id=current_session["id"],
+                        student_id=kwargs.get("id_student"),
+                        school=school,
+                        discipline=current_session["subject_name"],
+                        teacher=user_name,
+                        id_student=kwargs.get("id_student"),
+                        student=kwargs.get("student"),
+                        behavior=kwargs.get("behavior"),
+                        start_time=kwargs.get("start_time"),
+                        end_time=kwargs.get("end_time"),
+                        source=kwargs.get("source", "realtime"),
+                    ),
+                    stability_seconds=2.0,
+                    stability_frames=15,
+                )
+            with st.spinner("Preparando runtime de monitoramento..."):
+                st.session_state["monitor_runtime"] = build_monitor_runtime(device, RELAY_HOST, RELAY_PORT)
+            st.session_state.pop("monitor_waiting_since", None)
+            st.session_state.pop("monitor_last_display_frame", None)
+            st.session_state.pop("monitor_last_detector_frame_id", None)
+            st.session_state.pop("monitor_last_rendered_frame_id", None)
+            st.rerun()
 
-            detector = DetectorWorker(model, model_face, device).start()
+        with monitor_right_col:
+            st.markdown("<div class='monitor-right-panel'>", unsafe_allow_html=True)
+            if current_session:
+                st.markdown("<div class='monitor-video-shell'>", unsafe_allow_html=True)
+                _render_live_video_stream(height=720)
+                st.markdown("</div>", unsafe_allow_html=True)
+                process_monitor_fragment(
+                    school=school,
+                    discipline=current_session["subject_name"],
+                    user_name=user_name,
+                    confidence_threshold=CONFIDENCE_THRESHOLD,
+                    show_debug=show_debug,
+                    debug_font=debug_font,
+                    box_margin_ratio=BOX_MARGIN_RATIO,
+                )
+            else:
+                st.markdown("<h3 class='monitor-section-title' style='text-align:center;'>Vídeo de Monitoramento</h3>", unsafe_allow_html=True)
+                st.markdown(
+                    """
+                    <div style="min-height: 420px; border: 1px dashed rgba(255,255,255,0.18); border-radius: 12px;
+                    display:flex; align-items:center; justify-content:center; color:#9aa0aa;">
+                    A tela do monitoramento aparecerá aqui após o início da sessão.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            try:
-                while video_stream.running:
-                    if time.time() - prev_time < 1.0 / fps_limit:
-                        time.sleep(0.001)
-                        continue
-                    prev_time = time.time()
-
-                    frame = video_stream.read()
-                    if frame is None:
-                        continue
-
-                    detector.update_frame(frame)
-                    results, faces = detector.get_outputs()
-
-                    face_named = []
-                    if faces:
-                        for face in faces:
-                            fx1, fy1, fx2, fy2 = face.bbox.astype(int)
-                            name_face = "Desconhecido"
-                            if known_face_encodings_norm is not None:
-                                emb = face.embedding
-                                emb = emb / (np.linalg.norm(emb) + 1e-6)
-                                sims = cosine_similarity([emb], known_face_encodings_norm)[0]
-                                best_idx = int(np.argmax(sims))
-                                if float(sims[best_idx]) > 0.45:
-                                    name_face = known_face_names[best_idx]
-                            face_named.append(((fx1, fy1, fx2, fy2), name_face))
-                            if name_face != "Desconhecido":
-                                remember_name((fx1, fy1, fx2, fy2), name_face)
-
-                    if results:
-                        for result in results:
-                            if not hasattr(result, 'keypoints') or len(result.keypoints) == 0:
-                                continue
-                            keypoints_all = result.keypoints.data.cpu().numpy()
-                            hud_lines = []
-
-                            for pid, person_keypoints in enumerate(keypoints_all):
-                                if len(person_keypoints) == 0:
-                                    continue
-
-                                current_behavior = "Atento"
-                                have_all = False
-
-                                if person_keypoints.shape[0] > 10:
-                                    nose = person_keypoints[0]
-                                    ls, rs = person_keypoints[5], person_keypoints[6]
-                                    le, re = person_keypoints[7], person_keypoints[8]
-                                    lw, rw = person_keypoints[9], person_keypoints[10]
-
-                                    confs = [p[2] for p in [nose, ls, rs, le, re, lw, rw]]
-                                    have_all = all(c > CONFIDENCE_THRESHOLD for c in confs)
-                                    if have_all:
-                                        current_behavior = classify_behavior(nose, ls, rs, le, re, lw, rw, CONFIDENCE_THRESHOLD)
-
-                                x_coords = [p[0] for p in person_keypoints if p[2] > CONFIDENCE_THRESHOLD]
-                                y_coords = [p[1] for p in person_keypoints if p[2] > CONFIDENCE_THRESHOLD]
-                                if not x_coords or not y_coords:
-                                    continue
-                                x_min, x_max = int(min(x_coords)), int(max(x_coords))
-                                y_min, y_max = int(min(y_coords)), int(max(y_coords))
-                                y_min = max(0, int(y_min - BOX_MARGIN_RATIO * (y_max - y_min)))
-                                person_box = (x_min, y_min, x_max, y_max)
-
-                                best_i, name_student = 0.0, "Desconhecido"
-                                for (fb, nm) in face_named:
-                                    i = iou(person_box, fb)
-                                    if i > best_i:
-                                        best_i, name_student = i, nm
-                                if best_i < 0.10:
-                                    name_student = resolve_name(person_box)
-
-                                behavior_key = name_student if name_student != "Desconhecido" else f"pid_{pid}"
-
-                                if person_keypoints.shape[0] > 10:
-                                    nose = person_keypoints[0]
-                                    l_eye = person_keypoints[1]
-                                    r_eye = person_keypoints[2]
-                                    l_ear = person_keypoints[3]
-                                    r_ear = person_keypoints[4]
-                                    ls = person_keypoints[5]
-                                    rs = person_keypoints[6]
-
-                                    if nose[2] > CONFIDENCE_THRESHOLD or (ls[2] > CONFIDENCE_THRESHOLD and rs[2] > CONFIDENCE_THRESHOLD):
-                                        lateral_status = is_lateral_view(
-                                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=CONFIDENCE_THRESHOLD
-                                        )
-                                        back_status = is_back_view(
-                                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=CONFIDENCE_THRESHOLD
-                                        )
-                                        new_behavior = check_distracted_status(
-                                            behavior_key, (lateral_status or back_status), lateral_timers, timeout=DISTRACTED_TIMEOUT_SECONDS
-                                        )
-                                        if new_behavior:
-                                            current_behavior = new_behavior
-
-                                    raw_behavior = current_behavior
-                                    state = sleep_smoother.setdefault(behavior_key, {"state":"Atento","sleep":0,"awake":0})
-
-                                    if raw_behavior == "Dormindo":
-                                        state["sleep"] += 1
-                                        state["awake"] = 0
-                                        if state["state"] != "Dormindo" and state["sleep"] >= ENTER_SLEEP_FRAMES:
-                                            state["state"] = "Dormindo"
-                                    else:
-                                        state["awake"] += 1
-                                        state["sleep"] = 0
-                                        if state["state"] == "Dormindo" and state["awake"] >= EXIT_SLEEP_FRAMES:
-                                            state["state"] = raw_behavior
-                                        elif state["state"] != "Dormindo":
-                                            state["state"] = raw_behavior
-
-                                    current_behavior = state["state"]
-
-                                if name_student != "Desconhecido":
-                                    episode_manager.update_behavior(
-                                        student_key=name_student,
-                                        student_name=name_student,
-                                        student_id=None,
-                                        behavior=current_behavior,
-                                        timestamp=datetime.datetime.now(),
-                                        school=school,
-                                        discipline=discipline,
-                                        teacher=user_name,
-                                        source="realtime",
-                                    )
-
-                                box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
-                                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
-                                label_text = f"{name_student} - {current_behavior}"
-
-                                font = cv2.FONT_HERSHEY_SIMPLEX
-                                scale = 0.6
-                                thickness = 2
-                                pad_x, pad_y = 6, 4
-                                (text_w, text_h), _ = cv2.getTextSize(label_text, font, scale, thickness)
-
-                                tx = int(x_min)
-                                ty = int(y_min)
-                                top = ty - text_h - 2 * pad_y
-                                if top < 0:
-                                    top = ty
-
-                                cv2.rectangle(frame, (tx, top), (tx + text_w + 2 * pad_x, top + text_h + 2 * pad_y), box_color, -1)
-                                cv2.putText(frame, label_text, (tx + pad_x, top + text_h + pad_y - 1), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
-
-                                if show_debug and have_all:
-                                    shoulder_y = (ls[1] + rs[1]) / 2.0
-                                    s = max(1.0, abs(ls[0] - rs[0]))
-                                    best_vert_dist = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
-                                    near_thr = max(10.0, 0.32 * s)
-
-                                    hud_lines = [
-                                        f"s (ombro a ombro): {s:.1f}",
-                                        f"near_thr: {near_thr:.1f}",
-                                        f"shoulder_y: {shoulder_y:.1f}",
-                                        f"nose_y: {nose[1]:.1f}",
-                                        f"best_vert_dist: {best_vert_dist:.1f}",
-                                    ]
-                                    y0 = 24
-                                    for i, text in enumerate(hud_lines):
-                                        cv2.putText(frame, text, (10, y0 + int(i * 22 * debug_font)),
-                                                    cv2.FONT_HERSHEY_SIMPLEX, debug_font, (255, 255, 0), 2)
-
-                    disp = cv2.resize(frame, (960, 540))
-                    ok, jpg = cv2.imencode(".jpg", disp, [cv2.IMWRITE_JPEG_QUALITY, 82])
-                    if ok:
-                        b64 = base64.b64encode(jpg.tobytes()).decode("ascii")
-                        stframe.markdown(
-                            (
-                                '<img src="data:image/jpeg;base64,'
-                                f'{b64}" style="width:100%;height:auto;display:block;border-radius:8px;" />'
-                            ),
-                            unsafe_allow_html=True,
-                        )
-            finally:
+        if stop_system and current_session_id:
+            episode_manager = st.session_state.get("episode_manager")
+            if episode_manager is not None and current_session is not None:
                 episode_manager.flush_all(
                     timestamp=datetime.datetime.now(),
                     school=school,
-                    discipline=discipline,
+                    discipline=current_session["subject_name"],
                     teacher=user_name,
                     source="realtime",
                 )
-                try:
-                    detector.stop()
-                except Exception:
-                    pass
-                try:
-                    video_stream.stop()
-                except Exception:
-                    pass
-                if "video_stream" in st.session_state:
-                    del st.session_state["video_stream"]
-
-        if stop_system:
-            st.info("Monitoramento parado.")
-            if "video_stream" in st.session_state:
-                try:
-                    st.session_state.video_stream.stop()
-                except Exception:
-                    pass
-                del st.session_state["video_stream"]
+            close_monitoring_session(current_session_id, status=SESSION_STATUS_CLOSED)
+            closed_session = get_monitoring_session_summary(current_session_id)
+            teardown_monitor_runtime()
+            st.session_state.pop("episode_manager", None)
+            st.session_state.pop("student_lookup", None)
+            st.session_state.pop("monitoring_state", None)
+            st.session_state["last_closed_monitoring_session"] = closed_session
+            st.session_state.pop("monitor_waiting_since", None)
+            st.session_state.pop("monitor_last_display_frame", None)
+            st.session_state.pop("monitor_last_detector_frame_id", None)
+            st.session_state.pop("monitor_last_rendered_frame_id", None)
+            st.success("Sessão de monitoramento encerrada com sucesso.")
+            st.rerun()
 
     # ------------------ GRÁFICOS ------------------
     elif menu_option == "Gráficos":
-        st.title("📊 GRÁFICOS")
-        show_behavior_charts()
+        show_behavior_charts(user_context)
 
     # ------------------ RELATÓRIOS ------------------
     elif menu_option == "Relatórios":
-        render_report_page()
+        render_report_page(user_context)

@@ -5,6 +5,8 @@ from typing import Callable, Dict, Optional
 
 @dataclass
 class StudentEpisodeState:
+    student_name: str
+    student_id: Optional[str]
     current_behavior: str
     current_start_time: datetime
     pending_behavior: Optional[str] = None
@@ -43,10 +45,15 @@ class BehaviorEpisodeManager:
 
         if state is None:
             self.states[student_key] = StudentEpisodeState(
+                student_name=student_name,
+                student_id=student_id,
                 current_behavior=behavior,
                 current_start_time=timestamp,
             )
             return
+
+        state.student_name = student_name
+        state.student_id = student_id
 
         if behavior == state.current_behavior:
             state.pending_behavior = None
@@ -119,8 +126,8 @@ class BehaviorEpisodeManager:
     ):
         for student_key, state in list(self.states.items()):
             self._close_current_episode(
-                student_name=student_key,
-                student_id=None,
+                student_name=state.student_name or student_key,
+                student_id=state.student_id,
                 school=school,
                 discipline=discipline,
                 teacher=teacher,

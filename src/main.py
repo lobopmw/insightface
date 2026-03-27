@@ -1,13 +1,10 @@
 
 import streamlit as st
-from streamlit_option_menu import option_menu
-import pandas as pd
 import bcrypt
 from sqlalchemy import text
-from control_database_postgres import engine, registrar_usuario, user_table
+from control_database_postgres import engine, get_user_by_cpf, get_user_context, registrar_usuario, user_table
 from streamlit_cookies_controller import CookieController
 from insightface_classroom import recognition_behavior
-from register_face_multi_images_avg import register_faces
 import os
 
 
@@ -47,6 +44,7 @@ if "authenticated" not in st.session_state:
         st.session_state['city'] = get_cookie("city")
         st.session_state['state'] = get_cookie("state")
         st.session_state['name'] = get_cookie("name")
+        st.session_state['role'] = get_cookie("role")
 
     else:
         st.session_state["authenticated"] = False
@@ -54,6 +52,7 @@ if "authenticated" not in st.session_state:
         st.session_state['city'] = None
         st.session_state['state'] = None
         st.session_state['name'] = None
+        st.session_state['role'] = None
 
 
 #----------------------------------------------------------------------------------------------------------------------------------------#
@@ -73,22 +72,25 @@ def login():
             
             if validar_cpf(cpf):
                 try:
-                    with engine.connect() as conn:
-                        query = text("SELECT nome, cpf, password, cidade, estado FROM users WHERE cpf = :cpf")
-                        result = conn.execute(query, {"cpf": cpf}).fetchone()
+                    user = get_user_by_cpf(cpf)
+                    if user:
+                        stored_nome = user["nome"]
+                        stored_cpf = user["cpf"]
+                        stored_password = user["password"]
+                        stored_city = user["cidade"]
+                        stored_state = user["estado"]
+                        stored_role = user["role"]
 
-                        if result:
-                            stored_nome, stored_cpf, stored_password, stored_city, stored_state = result
-
-                            try:
-                                password_matches = bcrypt.checkpw(
-                                    password.encode('utf-8'),
-                                    stored_password.encode('utf-8')
-                                )
-                            except ValueError:
-                                password_matches = stored_password == password
-                                if password_matches:
-                                    new_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
+                        try:
+                            password_matches = bcrypt.checkpw(
+                                password.encode('utf-8'),
+                                stored_password.encode('utf-8')
+                            )
+                        except ValueError:
+                            password_matches = stored_password == password
+                            if password_matches:
+                                new_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode()
+                                with engine.connect() as conn:
                                     update_query = text("""
                                         UPDATE users
                                         SET password = :password
@@ -97,26 +99,29 @@ def login():
                                     conn.execute(update_query, {"password": new_hash, "cpf": stored_cpf})
                                     conn.commit()
 
-                            if password_matches:
-                                st.session_state['authenticated'] = True
-                                st.session_state['name'] = stored_nome
-                                st.session_state['cpf'] = stored_cpf
-                                st.session_state['city'] = stored_city
-                                st.session_state['state'] = stored_state
-                                
-                                # Salvar estado nos "cookies"
-                                set_cookie("authenticated", "true")
-                                set_cookie("name", stored_nome)
-                                set_cookie("cpf", stored_cpf)
-                                set_cookie("city", stored_city)
-                                set_cookie("state", stored_state)
+                        if password_matches:
+                            user_context = get_user_context(stored_cpf)
+                            st.session_state['authenticated'] = True
+                            st.session_state['name'] = stored_nome
+                            st.session_state['cpf'] = stored_cpf
+                            st.session_state['city'] = stored_city
+                            st.session_state['state'] = stored_state
+                            st.session_state['role'] = stored_role
+                            st.session_state['user_context'] = user_context
 
-                                st.success(f"Login realizado com sucesso! Bem-vindo, {stored_nome}")
-                                st.rerun()
-                            else:
-                                st.error("Usuário ou senha incorretos!")
+                            set_cookie("authenticated", "true")
+                            set_cookie("name", stored_nome)
+                            set_cookie("cpf", stored_cpf)
+                            set_cookie("city", stored_city or "")
+                            set_cookie("state", stored_state or "")
+                            set_cookie("role", stored_role or "professor")
+
+                            st.success(f"Login realizado com sucesso! Bem-vindo, {stored_nome}")
+                            st.rerun()
                         else:
-                            st.error("Usuário não encontrado!")
+                            st.error("Usuário ou senha incorretos!")
+                    else:
+                        st.error("Usuário não encontrado!")
                 except Exception as e:
                     st.error(f"Erro ao validar login: {e}")
             else:
@@ -234,12 +239,14 @@ def cadastrar_usuario():
         st.session_state['name'] = None
         st.session_state['city'] = None
         st.session_state['state'] = None
+        st.session_state['role'] = None
 
         delete_cookie("authenticated")
         delete_cookie("cpf")
         delete_cookie("name")
         delete_cookie("city")
         delete_cookie("state")
+        delete_cookie("role")
        
         st.rerun()
    
@@ -251,6 +258,8 @@ def main():
 
     
     if st.session_state.get("authenticated", False):
+        if "user_context" not in st.session_state and st.session_state.get("cpf"):
+            st.session_state["user_context"] = get_user_context(st.session_state["cpf"])
         # Redireciona para a interface principal
         recognition_behavior()
     else:
@@ -261,27 +270,7 @@ def main():
                     
                     st.image(image_path, width=300)
                     
-                # Variável de controle para a escolha da interface
-                if "selected_option" not in st.session_state:
-                    st.session_state["selected_option"] = "Login"
-
-                # Renderizar o formulário baseado na escolha
-                if st.session_state["selected_option"] == "Login":
-                    login()
-                elif st.session_state["selected_option"] == "Cadastrar":
-                    cadastrar_usuario()
-
-                # Mostrar o rádio abaixo do formulário
-                radio1, radio2, radio3 = st.columns([3,2,3])
-                with radio2:
-                    st.radio(
-                        "Selecione uma opção:",
-                        ["Login", "Cadastrar"],
-                        index=["Login", "Cadastrar"].index(st.session_state["selected_option"]),
-                        key="selected_option",
-                        horizontal=True,
-                        label_visibility="hidden"
-                    )
+                login()
 
                 
 
