@@ -34,11 +34,11 @@ BEHAVIOR_COLORS = {
 }
 
 HIGHLIGHT_CARD_STYLES = {
-    "predominancia": {"accent": "#66BB6A", "icon": "●", "badge": "Principal"},
-    "segunda_recorrencia": {"accent": "#FFB74D", "icon": "●", "badge": "Complementar"},
-    "padrao_geral": {"accent": "#64B5F6", "icon": "●", "badge": "Consistência"},
-    "variacao_principal": {"accent": "#EF5350", "icon": "●", "badge": "Comparação"},
-    "neutro": {"accent": "#90A4AE", "icon": "●", "badge": "Resumo"},
+    "predominancia": {"accent": "#66BB6A", "icon": "◆", "badge": "Principal"},
+    "segunda_recorrencia": {"accent": "#FFB74D", "icon": "◇", "badge": "Complementar"},
+    "padrao_geral": {"accent": "#64B5F6", "icon": "≋", "badge": "Consistência"},
+    "variacao_principal": {"accent": "#EF5350", "icon": "⇄", "badge": "Comparação"},
+    "neutro": {"accent": "#90A4AE", "icon": "•", "badge": "Resumo"},
 }
 
 DEFAULT_CLASS_START = pd.Timestamp("2000-01-01 08:00:00")
@@ -585,6 +585,61 @@ def _inject_report_top_styles() -> None:
             color: #F4F6FB;
             margin: -0.15rem 0 0.55rem 0;
         }
+        .overview-panel {
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.08);
+            padding: 0.95rem 1rem;
+            margin-bottom: 0.8rem;
+        }
+        .overview-panel.executive {
+            background: linear-gradient(180deg, rgba(56, 78, 112, 0.22) 0%, rgba(39, 49, 74, 0.16) 100%);
+        }
+        .overview-panel.interpretive {
+            background: linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.02) 100%);
+        }
+        .overview-panel-title {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: #F2F5FA;
+            margin-bottom: 0.45rem;
+        }
+        .overview-panel-body {
+            color: #CDD4DF;
+            line-height: 1.68;
+            font-size: 0.97rem;
+        }
+        .overview-panel-body.muted {
+            color: #B3BBC8;
+            font-size: 0.95rem;
+        }
+        .attention-list {
+            display: grid;
+            gap: 0.65rem;
+            margin-top: 0.55rem;
+        }
+        .attention-item {
+            display: flex;
+            gap: 0.7rem;
+            align-items: flex-start;
+            padding: 0.72rem 0.82rem;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.028);
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .attention-marker {
+            flex: 0 0 auto;
+            width: 0.52rem;
+            height: 0.52rem;
+            border-radius: 999px;
+            background: #FFB74D;
+            margin-top: 0.42rem;
+            box-shadow: 0 0 0 4px rgba(255,183,77,0.12);
+        }
+        .attention-text {
+            color: #D4DAE4;
+            line-height: 1.6;
+            font-size: 0.95rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -653,6 +708,62 @@ def _render_predominant_behavior_card(behavior: str, share_label: str) -> None:
         ),
         unsafe_allow_html=True,
     )
+
+
+def _shorten_text(text: str, max_sentences: int = 2) -> str:
+    if not text:
+        return ""
+
+    normalized = " ".join(str(text).split())
+    tokens = normalized.replace("?", ".").replace("!", ".").split(". ")
+    sentences: list[str] = []
+
+    for token in tokens:
+        candidate = token.strip()
+        if not candidate:
+            continue
+        if candidate[-1] not in ".!?":
+            candidate = f"{candidate}."
+        sentences.append(candidate)
+        if len(sentences) >= max_sentences:
+            break
+
+    return " ".join(sentences).strip() if sentences else normalized
+
+
+def _render_overview_text_panel(title: str, text: str, variant: str = "executive") -> None:
+    if not text:
+        st.info("Não houve base suficiente para compor este bloco.")
+        return
+
+    body_class = "overview-panel-body" if variant == "executive" else "overview-panel-body muted"
+    st.markdown(
+        (
+            f"<div class='overview-panel {variant}'>"
+            f"<div class='overview-panel-title'>{html.escape(title)}</div>"
+            f"<div class='{body_class}'>{html.escape(text)}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_attention_points(points: list[str]) -> None:
+    if not points:
+        st.info("Não houve pontos adicionais de atenção observacional para o período selecionado.")
+        return
+
+    items = []
+    for point in points:
+        concise_point = _shorten_text(point, max_sentences=1)
+        items.append(
+            "<div class='attention-item'>"
+            "<div class='attention-marker'></div>"
+            f"<div class='attention-text'>{html.escape(concise_point)}</div>"
+            "</div>"
+        )
+
+    st.markdown(f"<div class='attention-list'>{''.join(items)}</div>", unsafe_allow_html=True)
 
 
 def _build_quick_insights(report_data: dict) -> dict[str, str]:
@@ -828,6 +939,11 @@ def render_report_page(user_context: dict):
     comparison_display = _build_comparison_display(comparison_df)
     peak_days_display = _build_peak_days_display(report_data["peak_days"])
     quick_insights = _build_quick_insights(report_data)
+    short_summary = _shorten_text(build_observational_summary(report_data), max_sentences=2)
+    short_interpretation = _shorten_text(generate_interpretive_summary(report_data), max_sentences=2)
+    short_temporal_summary = _shorten_text(_build_timeline_temporal_summary(report_data), max_sentences=2)
+    concise_attention_points = attention_points[:3]
+    concise_comparison_lines = previous_period_lines[:3]
 
     predominant_share = float(summary_df.iloc[0]["duration_percentage"]) if not summary_df.empty else 0.0
     total_records_subtitle = (
@@ -916,7 +1032,6 @@ def render_report_page(user_context: dict):
         )
         fig_period.update_layout(margin=dict(l=10, r=10, t=50, b=10), legend_title_text="Comportamento")
 
-    temporal_summary = _build_timeline_temporal_summary(report_data)
     hourly_summary_display = _build_hourly_summary_display(timeline_df)
     tabs = st.tabs(
         ["Visão Geral", "Frequência e Duração", "Distribuição Temporal", "Comparações", "Detalhes e Exportação"]
@@ -926,10 +1041,8 @@ def render_report_page(user_context: dict):
         st.subheader("Síntese Analítica")
         overview_col1, overview_col2 = st.columns([1.35, 1], gap="large")
         with overview_col1:
-            st.markdown("##### Resumo Geral")
-            _render_justified_text(build_observational_summary(report_data))
-            st.markdown("##### Leitura Interpretativa")
-            _render_justified_text(generate_interpretive_summary(report_data))
+            _render_overview_text_panel("Resumo Executivo", short_summary, variant="executive")
+            _render_overview_text_panel("Leitura Interpretativa", short_interpretation, variant="interpretive")
         with overview_col2:
             st.markdown("##### Destaques Rápidos")
             card_col1, card_col2 = st.columns(2)
@@ -964,71 +1077,61 @@ def render_report_page(user_context: dict):
                 )
 
         st.markdown("##### Pontos de Atenção")
-        if attention_points:
-            for point in attention_points:
-                st.markdown(f"- {point}")
-        else:
-            st.info("Não houve pontos adicionais de atenção observacional para o período selecionado.")
+        _render_attention_points(concise_attention_points)
 
     with tabs[1]:
         st.subheader("Frequência e Duração")
-        st.caption(
-            "Esta seção concentra a leitura quantitativa por comportamento, reunindo frequência observada, participação relativa e duração estimada acumulada."
-        )
-        table_col, chart_col = st.columns([1.15, 1], gap="large")
-        with table_col:
-            st.markdown("##### Tabela de Frequências")
+        st.caption("Distribuição dos comportamentos observados e apoio visual de duração estimada.")
+        chart_col1, chart_col2 = st.columns([1.2, 1], gap="large")
+        with chart_col1:
+            st.plotly_chart(fig_occurrence, width="stretch")
+        with chart_col2:
+            st.plotly_chart(fig_duration, width="stretch")
+        with st.expander("Ver tabela consolidada de frequências", expanded=False):
             st.dataframe(display_summary, width="stretch", hide_index=True)
-        with chart_col:
-            st.markdown("##### Leitura Visual")
-            chart_inner_col1, chart_inner_col2 = st.columns(2)
-            with chart_inner_col1:
-                st.plotly_chart(fig_occurrence, width="stretch")
-            with chart_inner_col2:
-                st.plotly_chart(fig_duration, width="stretch")
 
     with tabs[2]:
         st.subheader("Distribuição Temporal")
-        st.caption(
-            "A análise temporal abaixo apresenta a sequência cronológica dos comportamentos observados ao longo do período monitorado, preservando a ordem e a duração relativa dos episódios registrados."
-        )
-        st.caption(
-            "Cada bloco representa um episódio contínuo classificado pelo sistema ao longo do horário monitorado."
-        )
+        st.caption("Linha do tempo dos episódios observados ao longo do período monitorado.")
         st.plotly_chart(fig_timeline, width="stretch")
-        _render_justified_text(temporal_summary)
-        st.markdown("##### Resumo complementar por faixas horárias reais")
-        st.caption(
-            "O quadro abaixo agrega os registros por faixa horária real, funcionando apenas como apoio à leitura cronológica principal."
-        )
-        if hourly_summary_display.empty:
-            st.info("Não houve base suficiente para montar o resumo complementar por faixas horárias.")
-        else:
-            st.dataframe(hourly_summary_display, width="stretch", hide_index=True)
+        st.info(short_temporal_summary or "Não houve base suficiente para sintetizar a leitura temporal.")
 
     with tabs[3]:
         st.subheader("Comparações")
-        st.caption(
-            "Esta seção concentra as variações entre o período analisado e o período imediatamente anterior, além de comparações internas quando o intervalo permite múltiplos recortes."
-        )
+        st.caption("Síntese curta da comparação com o período anterior e, quando disponível, com recortes internos.")
         st.markdown("##### Síntese Comparativa")
-        for line in previous_period_lines:
-            st.markdown(f"- {line}")
+        if concise_comparison_lines:
+            for line in concise_comparison_lines:
+                st.markdown(f"- {line}")
+        else:
+            st.info("Não há base comparativa suficiente para uma síntese resumida.")
 
         if fig_period is not None:
             st.markdown("##### Comparação entre Recortes do Período")
             st.plotly_chart(fig_period, width="stretch")
 
-        st.markdown("##### Comparação com o Período Imediatamente Anterior")
-        if comparison_display.empty:
-            st.info("Não há base comparativa suficiente.")
-        else:
-            st.dataframe(comparison_display, width="stretch", hide_index=True)
+        with st.expander("Ver comparação detalhada", expanded=False):
+            if comparison_display.empty:
+                st.info("Não há base comparativa suficiente.")
+            else:
+                st.dataframe(comparison_display, width="stretch", hide_index=True)
 
     with tabs[4]:
         st.subheader("Detalhes e Exportação")
         detail_col1, detail_col2 = st.columns([1, 1], gap="large")
         with detail_col1:
+            with st.expander("Tabela consolidada de frequências", expanded=False):
+                st.dataframe(display_summary, width="stretch", hide_index=True)
+            with st.expander("Resumo complementar por faixa horária", expanded=False):
+                if hourly_summary_display.empty:
+                    st.info("Não houve base suficiente para montar o resumo complementar por faixas horárias.")
+                else:
+                    st.dataframe(hourly_summary_display, width="stretch", hide_index=True)
+            with st.expander("Comparação detalhada com o período anterior", expanded=False):
+                if comparison_display.empty:
+                    st.info("Não há base comparativa suficiente.")
+                else:
+                    st.dataframe(comparison_display, width="stretch", hide_index=True)
             with st.expander("Resumo cronológico dos episódios", expanded=False):
                 st.dataframe(timeline_display, width="stretch", hide_index=True)
             with st.expander("Consistência comportamental detalhada", expanded=False):
@@ -1066,7 +1169,13 @@ def render_report_page(user_context: dict):
                 width="stretch",
             )
 
-            st.markdown("##### Limitações Metodológicas")
-            _render_justified_text(build_limitations_text())
-            st.markdown("##### Nota Metodológica sobre a Duração Estimada")
-            _render_justified_text(generate_methodological_note())
+            with st.expander("Síntese analítica completa", expanded=False):
+                st.markdown("##### Resumo Geral")
+                _render_justified_text(build_observational_summary(report_data))
+                st.markdown("##### Leitura Interpretativa")
+                _render_justified_text(generate_interpretive_summary(report_data))
+            with st.expander("Limitações e nota metodológica", expanded=False):
+                st.markdown("##### Limitações Metodológicas")
+                _render_justified_text(build_limitations_text())
+                st.markdown("##### Nota Metodológica sobre a Duração Estimada")
+                _render_justified_text(generate_methodological_note())
