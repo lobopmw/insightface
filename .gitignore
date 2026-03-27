@@ -34,5 +34,4 @@ Thumbs.db
 *.h5
 *.ckpt
 
-# Variáveis de ambiente e configs sensíveis
-.env
+
