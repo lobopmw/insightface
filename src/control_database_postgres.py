@@ -359,34 +359,64 @@ def get_user_context(cpf: str):
 
 def registrar_usuario(cpf, nome, hashed_password, cidade, estado, role="professor", email=None):
     try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT COUNT(*) FROM users WHERE cpf = :cpf"), {"cpf": cpf}).scalar()
+        with connect_database() as (conn, cursor):
+            cursor.execute("SELECT COUNT(*) FROM users WHERE cpf = %s", (cpf,))
+            result = cursor.fetchone()[0]
             if result and result > 0:
                 return "cpf_exists"
 
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO users (cpf, nome, password, cidade, estado, email, role, ativo)
-                    VALUES (:cpf, :nome, :password, :cidade, :estado, :email, :role, TRUE)
-                    """
-                ),
-                {
-                    "cpf": cpf,
-                    "nome": nome,
-                    "password": hashed_password,
-                    "cidade": cidade,
-                    "estado": estado,
-                    "email": email,
-                    "role": role,
-                },
+            cursor.execute(
+                """
+                INSERT INTO users (cpf, nome, password, cidade, estado, email, role, ativo)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                RETURNING id
+                """,
+                (cpf, nome, hashed_password, cidade, estado, email, role,),
             )
+            user_id = cursor.fetchone()[0]
+            _ensure_teacher_profile(conn, user_id, nome, role)
             conn.commit()
         return "ok"
     except IntegrityError:
         return "cpf_exists"
     except SQLAlchemyError as exc:
         print(f"Erro ao registrar usuario: {exc}")
+        return "error"
+
+
+def list_all_users():
+    with connect_database() as (_, cursor):
+        cursor.execute(
+            """
+            SELECT id, nome, cpf, cidade, estado, email, role, ativo, created_at
+            FROM users
+            ORDER BY nome ASC, id ASC
+            """
+        )
+        rows = cursor.fetchall()
+
+    return pd.DataFrame(
+        rows,
+        columns=["id", "nome", "cpf", "cidade", "estado", "email", "role", "ativo", "created_at"],
+    )
+
+
+def reset_user_password(user_id: int, hashed_password: str):
+    try:
+        with connect_database() as (conn, cursor):
+            cursor.execute(
+                """
+                UPDATE users
+                SET password = %s
+                WHERE id = %s
+                """,
+                (hashed_password, user_id),
+            )
+            updated_rows = cursor.rowcount
+            conn.commit()
+        return "ok" if updated_rows else "not_found"
+    except SQLAlchemyError as exc:
+        print(f"Erro ao redefinir senha do usuario {user_id}: {exc}")
         return "error"
 
 

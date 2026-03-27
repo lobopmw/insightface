@@ -1,4 +1,5 @@
 
+import base64
 import os
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
@@ -12,7 +13,6 @@ import numpy as np
 import time
 import torch
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 from datetime import timedelta
 import datetime
@@ -43,6 +43,7 @@ from socket_video_stream import VideoStream  # cliente do relay via socket
 import threading
 from collections import deque
 from behavior_episode_service import BehaviorEpisodeManager
+from ui.admin_user_page import render_admin_user_page
 from ui.report_page import render_report_page
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -75,6 +76,12 @@ image_path_table     = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 
 lateral_timers = {}
 DISTRACTED_TIMEOUT_SECONDS = 2.5
+UNKNOWN_IDENTITY_LABELS = {"desconhecido", "unknown", ""}
+
+
+def img_to_base64(path: str) -> str:
+    with open(path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode("utf-8")
 
 
 def get_runtime_diagnostics():
@@ -157,31 +164,6 @@ def teardown_monitor_runtime():
             except Exception:
                 pass
     build_monitor_runtime.clear()
-
-
-def _render_live_video_stream(height: int = 720):
-    components.html(
-        f"""
-        <div style="width:100%;">
-          <img id="live-monitor-stream"
-               alt="Vídeo de monitoramento ao vivo"
-               style="width:100%; height:auto; display:block; border-radius:12px; border:1px solid rgba(255,255,255,0.08); background:#05070d;" />
-        </div>
-        <script>
-          (function() {{
-            const img = document.getElementById("live-monitor-stream");
-            const host = window.location.hostname || "localhost";
-            const protocol = window.location.protocol === "https:" ? "https:" : "http:";
-            const streamUrl = `${{protocol}}//${{host}}:{RELAY_HTTP_PORT}/mjpeg`;
-            if (img.dataset.src !== streamUrl) {{
-              img.dataset.src = streamUrl;
-              img.src = streamUrl;
-            }}
-          }})();
-        </script>
-        """,
-        height=height + 12,
-    )
 
 
 def _friendly_session_status(status: str | None) -> str:
@@ -280,8 +262,10 @@ def process_monitor_fragment(
     show_debug: bool,
     debug_font: float,
     box_margin_ratio: float,
+    show_unknown_boxes: bool,
+    status_placeholder,
+    frame_placeholder,
 ):
-    status_placeholder = st.empty()
     runtime = st.session_state.get("monitor_runtime")
     video_stream = None if runtime is None else runtime.get("video_stream")
     detector = None if runtime is None else runtime.get("detector")
@@ -331,7 +315,6 @@ def process_monitor_fragment(
         return False
 
     st.session_state["monitor_waiting_since"] = time.time()
-    status_placeholder.empty()
 
     last_detector_frame_id = st.session_state.get("monitor_last_detector_frame_id", -1)
     if detector is not None and frame_id != last_detector_frame_id:
@@ -343,7 +326,10 @@ def process_monitor_fragment(
     results, faces = detector.get_outputs()
 
     face_named = []
+    detected_faces_count = 0
+    recognized_faces_count = 0
     if faces:
+        detected_faces_count = len(faces)
         for face in faces:
             fx1, fy1, fx2, fy2 = face.bbox.astype(int)
             name_face = "Desconhecido"
@@ -356,7 +342,11 @@ def process_monitor_fragment(
                     name_face = known_face_names[best_idx]
             face_named.append(((fx1, fy1, fx2, fy2), name_face))
             if name_face != "Desconhecido":
+                recognized_faces_count += 1
                 remember_name((fx1, fy1, fx2, fy2), name_face)
+
+    rendered_tracks_count = 0
+    hidden_unknown_tracks_count = 0
 
     if results:
         for result in results:
@@ -457,9 +447,14 @@ def process_monitor_fragment(
                         source="realtime",
                     )
 
+                if not should_render_track(name_student, show_unknown_boxes):
+                    hidden_unknown_tracks_count += 1
+                    continue
+
                 box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
                 label_text = f"{name_student} - {current_behavior}"
+                rendered_tracks_count += 1
 
                 font = cv2.FONT_HERSHEY_SIMPLEX
                 scale = 0.6
@@ -497,6 +492,17 @@ def process_monitor_fragment(
     last_rendered_frame_id = st.session_state.get("monitor_last_rendered_frame_id", -1)
     if frame_id != last_rendered_frame_id:
         st.session_state["monitor_last_rendered_frame_id"] = frame_id
+
+    if known_face_encodings_norm is None or len(known_face_names) == 0:
+        status_placeholder.warning(
+            "Nenhum embedding de aluno foi carregado. "
+            "Rode o processo de geracao de embeddings para habilitar o reconhecimento facial."
+        )
+    else:
+        status_placeholder.empty()
+
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
     return True
 
 # ---------------- Associação por IoU + memória curta de nome ----------------
@@ -518,6 +524,14 @@ _name_mem = deque(maxlen=80)
 
 def remember_name(box, name):
     _name_mem.append({"box": box, "name": name, "ts": time.time()})
+
+
+def should_render_track(identity: str, show_unknown_boxes: bool = False) -> bool:
+    if show_unknown_boxes:
+        return True
+    normalized_identity = (identity or "").strip().lower()
+    return normalized_identity not in UNKNOWN_IDENTITY_LABELS
+
 
 def resolve_name(person_box):
     now = time.time()
@@ -777,7 +791,7 @@ def recognition_behavior():
         st.rerun()
 
     teacher_menu = ["Cadastro de Alunos", "Monitoramento", "Gráficos", "Relatórios"]
-    admin_menu = ["Gráficos", "Relatórios"]
+    admin_menu = ["Usuários", "Gráficos", "Relatórios"]
     menu_option = st.sidebar.radio("Menu", admin_menu if user_role == "admin" else teacher_menu)
 
     # ------------------ CADASTRO ------------------
@@ -979,23 +993,53 @@ def recognition_behavior():
             """
             <style>
             .monitor-page-title {
-                margin: 0.15rem 0 0 0;
-                font-size: 2.15rem;
-                line-height: 1.05;
+                margin: 0;
+                font-size: 1.7rem;
+                line-height: 1.1;
                 font-weight: 800;
                 letter-spacing: 0.01em;
             }
             .monitor-header-wrap {
-                margin-bottom: 0.7rem;
+                margin-bottom: 0.4rem;
+            }
+            .monitor-header-compact {
+                display: flex;
+                align-items: center;
+                gap: 0.9rem;
+                margin: 0.1rem 0 0.35rem 0;
+            }
+            .monitor-header-icon img {
+                display: block;
+                width: 74px;
+                height: auto;
+            }
+            .monitor-header-text {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                flex-wrap: wrap;
+                min-width: 0;
+            }
+            .monitor-placeholder-header {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 0.9rem;
+                margin: 0 0 0.8rem 0;
+            }
+            .monitor-placeholder-header img {
+                width: 58px;
+                height: auto;
+                display: block;
             }
             .monitor-layout {
-                margin-top: 0.15rem;
+                margin-top: 0;
             }
             .monitor-layout [data-testid="column"] > div {
                 height: 100%;
             }
             .monitor-right-panel {
-                margin-top: -10.8rem;
+                margin-top: 0;
             }
             .monitor-section-title {
                 margin: 0;
@@ -1009,9 +1053,18 @@ def recognition_behavior():
                 margin: 0.3rem 0 0.55rem 0;
             }
             .monitor-video-shell {
-                margin-top: -0.15rem;
+                margin-top: 0;
             }
             @media (max-width: 1100px) {
+                .monitor-header-compact {
+                    align-items: flex-start;
+                }
+                .monitor-header-icon img {
+                    width: 56px;
+                }
+                .monitor-placeholder-header img {
+                    width: 48px;
+                }
                 .monitor-right-panel {
                     margin-top: 0;
                 }
@@ -1058,8 +1111,10 @@ def recognition_behavior():
             )
 
         # HUD de debug no canto esquerdo
-        show_debug = st.sidebar.toggle("Mostrar debug (Dormindo)", value=False)
-        debug_font = st.sidebar.slider("Tamanho fonte debug", 0.4, 2.0, 0.8, 0.1)
+        with st.sidebar.expander("Debug de exibicao"):
+            show_debug = st.toggle("Mostrar debug (Dormindo)", value=False)
+            show_unknown_boxes = st.toggle("Mostrar desconhecidos", value=False)
+            debug_font = st.slider("Tamanho fonte debug", 0.4, 2.0, 0.8, 0.1)
         BOX_MARGIN_RATIO = 0.2
         if user_role != "professor":
             st.info("O monitoramento operacional está disponível apenas para o perfil professor.")
@@ -1077,30 +1132,9 @@ def recognition_behavior():
         selected_subject_id = monitor_state.get("selected_subject_id")
         selected_class_id = monitor_state.get("selected_class_id")
 
-        st.markdown("<div class='monitor-header-wrap'>", unsafe_allow_html=True)
-        col_img1, col_img2, _ = st.columns([0.9, 4.1, 1], gap="small")
-        with col_img1:
-            st.image(image_path_cam, width=168)
-        with col_img2:
-            if header_is_live:
-                st.markdown(
-                    """
-                    <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-top:0.15rem;">
-                      <div class='monitor-page-title' style="margin:0;">Vídeo de Monitoramento</div>
-                      <span style='display:inline-flex; align-items:center; gap:0.35rem; padding:0.22rem 0.72rem;
-                      border-radius:999px; background:rgba(61,220,151,0.14); border:1px solid rgba(61,220,151,0.35);
-                      color:#3DDC97; font-size:0.82rem; font-weight:700;'>AO VIVO</span>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown("<div class='monitor-page-title'>Monitoramento da Aula</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
         last_closed_session = st.session_state.get("last_closed_monitoring_session")
         st.markdown("<div class='monitor-layout'>", unsafe_allow_html=True)
-        monitor_left_col, monitor_right_col = st.columns([1.08, 2.42], gap="large")
+        monitor_left_col, monitor_right_col = st.columns([0.92, 2.58], gap="large")
         with monitor_left_col:
             subject_options = {int(row["id"]): row["nome"] for _, row in subjects_df.iterrows()}
             default_subject_index = 0
@@ -1163,6 +1197,31 @@ def recognition_behavior():
             else:
                 _render_context_card(ui_state, selected_subject_label, selected_class_label, session_panel)
             st.markdown("<div style='height:0.85rem;'></div>", unsafe_allow_html=True)
+
+            if ui_state == "Em andamento":
+                live_badge_markup = (
+                    "<span style='display:inline-flex; align-items:center; gap:0.35rem; padding:0.22rem 0.72rem; "
+                    "border-radius:999px; background:rgba(61,220,151,0.14); border:1px solid rgba(61,220,151,0.35); "
+                    "color:#3DDC97; font-size:0.82rem; font-weight:700;'>AO VIVO</span>"
+                    if header_is_live
+                    else ""
+                )
+                st.markdown(
+                    f"""
+                    <div class='monitor-header-wrap'>
+                      <div class='monitor-header-compact'>
+                        <div class='monitor-header-icon'>
+                          <img src="data:image/png;base64,{img_to_base64(image_path_cam)}" alt="Camera de monitoramento" />
+                        </div>
+                        <div class='monitor-header-text'>
+                          <div class='monitor-page-title'>Video de Monitoramento</div>
+                          {live_badge_markup}
+                        </div>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
             if ui_state == "Não iniciado":
                 run_system = st.button("Iniciar monitoramento", type="primary", use_container_width=True)
@@ -1251,7 +1310,8 @@ def recognition_behavior():
             st.markdown("<div class='monitor-right-panel'>", unsafe_allow_html=True)
             if current_session:
                 st.markdown("<div class='monitor-video-shell'>", unsafe_allow_html=True)
-                _render_live_video_stream(height=720)
+                monitor_status_placeholder = st.empty()
+                monitor_frame_placeholder = st.empty()
                 st.markdown("</div>", unsafe_allow_html=True)
                 process_monitor_fragment(
                     school=school,
@@ -1261,9 +1321,20 @@ def recognition_behavior():
                     show_debug=show_debug,
                     debug_font=debug_font,
                     box_margin_ratio=BOX_MARGIN_RATIO,
+                    show_unknown_boxes=show_unknown_boxes,
+                    status_placeholder=monitor_status_placeholder,
+                    frame_placeholder=monitor_frame_placeholder,
                 )
             else:
-                st.markdown("<h3 class='monitor-section-title' style='text-align:center;'>Vídeo de Monitoramento</h3>", unsafe_allow_html=True)
+                st.markdown(
+                    f"""
+                    <div class='monitor-placeholder-header'>
+                      <img src="data:image/png;base64,{img_to_base64(image_path_cam)}" alt="Camera de monitoramento" />
+                      <h3 class='monitor-section-title'>Vídeo de Monitoramento</h3>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
                 st.markdown(
                     """
                     <div style="min-height: 420px; border: 1px dashed rgba(255,255,255,0.18); border-radius: 12px;
@@ -1299,6 +1370,10 @@ def recognition_behavior():
             st.session_state.pop("monitor_last_rendered_frame_id", None)
             st.success("Sessão de monitoramento encerrada com sucesso.")
             st.rerun()
+
+    # ------------------ GRÁFICOS ------------------
+    elif menu_option == "Usuários":
+        render_admin_user_page(user_context)
 
     # ------------------ GRÁFICOS ------------------
     elif menu_option == "Gráficos":
