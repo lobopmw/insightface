@@ -78,6 +78,12 @@ lateral_timers = {}
 DISTRACTED_TIMEOUT_SECONDS = 2.5
 UNKNOWN_IDENTITY_LABELS = {"desconhecido", "unknown", ""}
 
+FACE_DET_SIZE_GPU = (1280, 1280)
+FACE_DET_SIZE_CPU = (960, 960)
+POSE_IMGSZ_GPU = 1280
+POSE_IMGSZ_CPU = 960
+POSE_DET_CONF = 0.22
+
 
 def img_to_base64(path: str) -> str:
     with open(path, "rb") as image_file:
@@ -125,10 +131,10 @@ def build_monitor_runtime(device: str, relay_host: str, relay_port: int):
 
     if device == "cuda":
         model_face = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider","CPUExecutionProvider"])
-        model_face.prepare(ctx_id=0, det_size=(832,832))
+        model_face.prepare(ctx_id=0, det_size=FACE_DET_SIZE_GPU)
     else:
         model_face = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-        model_face.prepare(ctx_id=-1, det_size=(832,832))
+        model_face.prepare(ctx_id=-1, det_size=FACE_DET_SIZE_CPU)
 
     known_face_encodings, known_face_names = load_insightface_data()
     known_face_encodings_norm = (
@@ -136,7 +142,14 @@ def build_monitor_runtime(device: str, relay_host: str, relay_port: int):
     ) if len(known_face_encodings) > 0 else None
 
     video_stream = VideoStream((relay_host, relay_port)).start()
-    detector = DetectorWorker(model, model_face, device).start()
+    pose_imgsz = POSE_IMGSZ_GPU if device == "cuda" else POSE_IMGSZ_CPU
+    detector = DetectorWorker(
+        model,
+        model_face,
+        device,
+        pose_imgsz=pose_imgsz,
+        pose_conf=POSE_DET_CONF,
+    ).start()
 
     return {
         "model": model,
@@ -550,10 +563,12 @@ class DetectorWorker:
     Roda YOLO (pose) + InsightFace em background, sempre no frame mais recente.
     Evita fila e mantém o vídeo "ao vivo".
     """
-    def __init__(self, model_pose, model_face, device, min_inference_interval=0.18):
+    def __init__(self, model_pose, model_face, device, min_inference_interval=0.18, pose_imgsz=960, pose_conf=0.22):
         self.model_pose = model_pose
         self.model_face = model_face
         self.device = device
+        self.pose_imgsz = int(pose_imgsz)
+        self.pose_conf = float(pose_conf)
         self._latest_frame = None
         self._latest_frame_id = -1
         self._last_results = []
@@ -614,7 +629,15 @@ class DetectorWorker:
                 continue
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             faces = self.model_face.get(rgb)
-            results = self.model_pose.predict(frame, show=False, device=self.device, verbose=False, imgsz=896, conf=0.35, half=(self.device == "cuda"))
+            results = self.model_pose.predict(
+                frame,
+                show=False,
+                device=self.device,
+                verbose=False,
+                imgsz=self.pose_imgsz,
+                conf=self.pose_conf,
+                half=(self.device == "cuda"),
+            )
             with self._lock:
                 self._last_faces = faces
                 self._last_results = results
