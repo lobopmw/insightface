@@ -95,7 +95,7 @@ CAPTURE_POSE_LABELS = {
     "frontal": "Frontal",
     "lateral_esquerda": "Esquerda",
     "lateral_direita": "Direita",
-    "cabeca_baixa": "Perfil",
+    "cabeca_baixa": "Cabeça baixa",
 }
 
 
@@ -1543,7 +1543,7 @@ def recognition_behavior():
             <div class="sidebar-help-row">
                 <div class="sidebar-help-icon">i</div>
                 <div>
-                    <div class="sidebar-help-title">Sistema de Monitoramento Comportamental</div>
+                    <div class="sidebar-help-title">Plataforma de Monitoramento Comportamental</div>
                     <div class="sidebar-help-subtitle">Turmas A • IA-2026</div>
                 </div>
             </div>
@@ -1753,7 +1753,11 @@ def recognition_behavior():
                     )
                 elif cap_running:
                     st.markdown(
-                        "<div class='student-reg-info'>Captura em andamento. Aguarde a conclusão automática desta pose.</div>",
+                        "<div class='student-reg-info'>"
+                        "Captura em andamento. Aguarde a conclusão automática desta pose.<br/>"
+                        "Durante a coleta, faça pequenos movimentos para frente e para trás, varie levemente o ângulo "
+                        "e, se possível, pegue pequenas diferenças de iluminação sem sair da pose atual."
+                        "</div>",
                         unsafe_allow_html=True,
                     )
                 elif registration_ready:

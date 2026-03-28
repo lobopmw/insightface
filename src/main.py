@@ -10,7 +10,8 @@ import os
 
 #-----------------------------------------------------------------------------------------------------------------------------------#
 # Configurações iniciais
-st.set_page_config(page_title="Monitoramento - SEDUC", page_icon="../images/icon_school.jpg", layout="wide")
+page_icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/cam_IA.png"))
+st.set_page_config(page_title="Monitoramento - SEDUC", page_icon=page_icon_path, layout="wide")
 
 image_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/classroom1.jpg"))
 
@@ -63,13 +64,12 @@ def login():
     # Coleta de informações de login
     colbutton1,colbutton2,colbutton3 = st.columns([1,3,1])
     with colbutton2:
-        cpf = st.text_input("CPF", placeholder="👤 CPF", max_chars=11, label_visibility= "hidden")
-        password = st.text_input("Senha", type="password", placeholder="🔒 Senha", label_visibility= "hidden")
+        with st.form("login_form", clear_on_submit=False):
+            cpf = st.text_input("CPF", placeholder="👤 CPF", max_chars=11, label_visibility= "hidden")
+            password = st.text_input("Senha", type="password", placeholder="🔒 Senha", label_visibility= "hidden")
+            submit_login = st.form_submit_button("**➡ Login**", use_container_width=True, type="primary")
 
-    with colbutton2:
-
-        if st.button("**➡ Login**", width="stretch", key="submit-button", type="primary"):
-            
+        if submit_login:
             if validar_cpf(cpf):
                 try:
                     user = get_user_by_cpf(cpf)
