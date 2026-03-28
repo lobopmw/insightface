@@ -1491,6 +1491,13 @@ def show_behavior_charts(user_context: dict):
         font=dict(color="#DCE3F4"),
         margin=dict(l=10, r=10, t=10, b=10),
         legend=dict(orientation="v", yanchor="middle", y=0.5, x=1.02, xanchor="left"),
+        uniformtext_minsize=18,
+        uniformtext_mode="show",
+    )
+    fig_pie.update_traces(
+        texttemplate="<b>%{percent}</b>",
+        textposition="inside",
+        insidetextfont=dict(size=24, color="#F7FAFF"),
     )
     fig_bar = px.bar(
         df_behavior,
@@ -1502,7 +1509,12 @@ def show_behavior_charts(user_context: dict):
         color_discrete_map=cores,
         template="plotly_dark",
     )
-    fig_bar.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig_bar.update_traces(
+        texttemplate="<b>%{text:.1f}</b>",
+        textposition="outside",
+        textfont=dict(size=20, color="#F7FAFF"),
+        cliponaxis=False,
+    )
     fig_bar.update_layout(
         title_text="",
         paper_bgcolor="rgba(0,0,0,0)",

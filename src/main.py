@@ -265,11 +265,10 @@ def main():
     else:
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-                logo1, logo2, logo3 = st.columns([5, 10, 5])
-                with logo2:
-                    
-                    st.image(image_path, width=300)
-                    
+                image_col1, image_col2, image_col3 = st.columns([1, 3, 1])
+                with image_col2:
+                    st.image(image_path, use_container_width=True)
+
                 login()
 
                 
