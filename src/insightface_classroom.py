@@ -612,18 +612,20 @@ def _inject_sidebar_menu_styles() -> None:
             line-height: 1.45;
         }
         [data-testid="stSidebar"] .stButton > button {
-            min-height: 54px;
-            border-radius: 18px;
-            border: 1px solid rgba(255,255,255,0.12);
-            background: linear-gradient(180deg, rgba(30,33,52,0.94) 0%, rgba(21,24,38,0.96) 100%);
+            min-height: 62px;
+            border-radius: 20px;
+            border: 1px solid rgba(132,148,255,0.26);
+            background: linear-gradient(180deg, rgba(43,49,76,0.98) 0%, rgba(28,33,52,0.98) 100%);
             color: #FFFFFF;
-            font-size: 1.35rem;
-            font-weight: 700;
-            box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+            font-size: 1.7rem;
+            font-weight: 800;
+            text-shadow: 0 0 10px rgba(255,255,255,0.18);
+            box-shadow: 0 12px 28px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.06);
         }
         [data-testid="stSidebar"] .stButton > button:hover {
-            border-color: rgba(255,255,255,0.22);
+            border-color: rgba(161,176,255,0.42);
             color: #FFFFFF;
+            transform: translateY(-1px);
         }
         .sidebar-help-row {
             display: flex;
@@ -1504,7 +1506,7 @@ def recognition_behavior():
         f"<img class='sidebar-hero-img' src='data:image/png;base64,{img_to_base64(image_path_classroom)}' alt='Sala de aula' />",
         unsafe_allow_html=True,
     )
-    profile_col, logout_col = st.sidebar.columns([4.2, 1])
+    profile_col, logout_col = st.sidebar.columns([4, 1.2])
     with profile_col:
         st.markdown(
             f"""
@@ -1519,7 +1521,7 @@ def recognition_behavior():
             unsafe_allow_html=True,
         )
     with logout_col:
-        logout_clicked = st.button("⇥", key="sidebar_logout_button", use_container_width=True)
+        logout_clicked = st.button("↩", key="sidebar_logout_button", use_container_width=True)
     st.sidebar.markdown("<div class='sidebar-profile-divider'></div>", unsafe_allow_html=True)
     st.sidebar.markdown("<div class='sidebar-menu-label'>Menu</div>", unsafe_allow_html=True)
     menu_display_selected = st.sidebar.radio(

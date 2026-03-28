@@ -72,6 +72,11 @@ def _to_csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
+def _build_export_base_name(student_name: str, start_date: date, end_date: date) -> str:
+    safe_student = "_".join(str(student_name or "aluno").split()).lower()
+    return f"{safe_student}_{start_date.isoformat()}_{end_date.isoformat()}"
+
+
 def _render_justified_text(text: str) -> None:
     if not text:
         return
@@ -482,6 +487,56 @@ def _inject_report_top_styles() -> None:
             box-shadow: 0 16px 36px rgba(0,0,0,0.18);
             margin: 1rem 0 1rem 0;
         }
+        .report-action-shell {
+            border-radius: 22px;
+            border: 1px solid rgba(123, 144, 255, 0.18);
+            background:
+                radial-gradient(circle at top right, rgba(86, 112, 255, 0.18), transparent 34%),
+                linear-gradient(180deg, rgba(29, 33, 48, 0.94) 0%, rgba(21, 24, 34, 0.98) 100%);
+            padding: 1rem 1.1rem 1.05rem 1.1rem;
+            box-shadow: 0 16px 36px rgba(0,0,0,0.18);
+            margin: 0.35rem 0 1rem 0;
+        }
+        .report-action-eyebrow {
+            font-size: 0.8rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #9BA7C0;
+            font-weight: 700;
+            margin-bottom: 0.45rem;
+        }
+        .report-action-title {
+            font-size: 1.16rem;
+            font-weight: 800;
+            color: #F5F7FC;
+            margin-bottom: 0.25rem;
+        }
+        .report-action-subtitle {
+            font-size: 0.95rem;
+            line-height: 1.6;
+            color: #B6BED0;
+            margin: 0;
+        }
+        .report-action-note {
+            margin-top: 0.65rem;
+            font-size: 0.88rem;
+            color: #8F99AE;
+        }
+        .report-filter-note {
+            margin-top: -0.2rem;
+            margin-bottom: 0.85rem;
+            color: #98A2B8;
+            font-size: 0.93rem;
+            line-height: 1.55;
+        }
+        .report-section-kicker {
+            font-size: 0.84rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #9EA7BC;
+            font-weight: 700;
+            margin: 0 0 0.85rem 0;
+        }
         .report-panel-title {
             font-size: 0.88rem;
             letter-spacing: 0.04em;
@@ -663,6 +718,58 @@ def _render_report_top_header() -> None:
     )
 
 
+def _render_report_export_actions(
+    report_data: dict,
+    display_summary: pd.DataFrame,
+    timeline_display: pd.DataFrame,
+    selected_student: str,
+    start_date: date,
+    end_date: date,
+) -> None:
+    export_base_name = _build_export_base_name(selected_student, start_date, end_date)
+    pdf_bytes = build_report_pdf(report_data)
+    summary_csv = _to_csv_bytes(display_summary)
+    timeline_csv = _to_csv_bytes(timeline_display)
+
+    st.markdown(
+        """
+        <div class="report-action-shell">
+            <div class="report-action-eyebrow">Saída do Relatório</div>
+            <div class="report-action-title">Gerar a versão formal do relatório</div>
+            <p class="report-action-subtitle">
+                Esta tela apresenta uma visão analítica resumida. Para compartilhar, arquivar ou encaminhar o resultado,
+                exporte o relatório completo em PDF ou os dados em formato tabular.
+            </p>
+            <div class="report-action-note">As exportações detalhadas continuam disponíveis na aba “Detalhes e Exportação”.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    action_col1, action_col2, action_col3 = st.columns([1.15, 1, 1], gap="medium")
+    action_col1.download_button(
+        "📄 Gerar PDF",
+        data=pdf_bytes,
+        file_name=f"relatorio_observacional_{export_base_name}.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+        type="primary",
+    )
+    action_col2.download_button(
+        "📊 Exportar resumo",
+        data=summary_csv,
+        file_name=f"relatorio_resumo_{export_base_name}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    action_col3.download_button(
+        "🗂 Exportar episódios",
+        data=timeline_csv,
+        file_name=f"relatorio_episodios_{export_base_name}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
 def _render_kpi_card(title: str, value: str, subtitle: str, orb_style: str, icon: str, is_last: bool = False) -> None:
     extra_class = " last" if is_last else ""
     st.markdown(
@@ -807,6 +914,7 @@ def _build_quick_insights(report_data: dict) -> dict[str, str]:
 def render_report_page(user_context: dict):
     _inject_report_top_styles()
     _render_report_top_header()
+    top_actions_placeholder = st.empty()
 
     base_options = get_available_filters(user_context)
     students_df = base_options["students"]
@@ -816,6 +924,10 @@ def render_report_page(user_context: dict):
 
     with st.container(border=True):
         st.markdown("<div class='report-panel-title'>Filtros do relatório</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='report-filter-note'>Defina o contexto de análise abaixo. Em seguida, use as ações no topo para gerar a versão formal do relatório ou exportar os dados.</div>",
+            unsafe_allow_html=True,
+        )
 
         controls_col1, controls_col2, controls_col3, controls_col4 = st.columns([2, 2, 2, 2])
         with controls_col1:
@@ -944,6 +1056,16 @@ def render_report_page(user_context: dict):
     short_temporal_summary = _shorten_text(_build_timeline_temporal_summary(report_data), max_sentences=2)
     concise_attention_points = attention_points[:3]
     concise_comparison_lines = previous_period_lines[:3]
+
+    with top_actions_placeholder.container():
+        _render_report_export_actions(
+            report_data=report_data,
+            display_summary=display_summary,
+            timeline_display=timeline_display,
+            selected_student=selected_student,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     predominant_share = float(summary_df.iloc[0]["duration_percentage"]) if not summary_df.empty else 0.0
     total_records_subtitle = (
@@ -1118,6 +1240,7 @@ def render_report_page(user_context: dict):
 
     with tabs[4]:
         st.subheader("Detalhes e Exportação")
+        st.caption("Área complementar com tabelas extensas, síntese completa e exportações adicionais.")
         detail_col1, detail_col2 = st.columns([1, 1], gap="large")
         with detail_col1:
             with st.expander("Tabela consolidada de frequências", expanded=False):
@@ -1145,26 +1268,27 @@ def render_report_page(user_context: dict):
                 else:
                     st.dataframe(peak_days_display, width="stretch", hide_index=True)
         with detail_col2:
+            export_base_name = _build_export_base_name(selected_student, start_date, end_date)
             st.markdown("##### Exportação")
             export_col1, export_col2, export_col3 = st.columns(3)
             export_col1.download_button(
                 "Baixar CSV do resumo",
                 data=_to_csv_bytes(display_summary),
-                file_name=f"relatorio_resumo_{selected_student}_{format_date_br(start_date)}_{format_date_br(end_date)}.csv",
+                file_name=f"relatorio_resumo_{export_base_name}.csv",
                 mime="text/csv",
                 width="stretch",
             )
             export_col2.download_button(
                 "Baixar CSV dos episódios",
                 data=_to_csv_bytes(timeline_display),
-                file_name=f"relatorio_episodios_{selected_student}_{format_date_br(start_date)}_{format_date_br(end_date)}.csv",
+                file_name=f"relatorio_episodios_{export_base_name}.csv",
                 mime="text/csv",
                 width="stretch",
             )
             export_col3.download_button(
                 "Baixar PDF",
                 data=build_report_pdf(report_data),
-                file_name=f"relatorio_observacional_{selected_student}_{format_date_br(start_date)}_{format_date_br(end_date)}.pdf",
+                file_name=f"relatorio_observacional_{export_base_name}.pdf",
                 mime="application/pdf",
                 width="stretch",
             )
