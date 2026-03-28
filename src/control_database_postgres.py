@@ -56,6 +56,46 @@ def get_local_now() -> datetime.datetime:
     return datetime.datetime.now(ZoneInfo(APP_TIMEZONE)).replace(tzinfo=None)
 
 
+def _chart_icon_svg(kind: str) -> str:
+    icons = {
+        "summary": """
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="12" width="3" height="7" rx="1.2" fill="currentColor"></rect>
+                <rect x="10.5" y="8" width="3" height="11" rx="1.2" fill="currentColor" opacity="0.92"></rect>
+                <rect x="17" y="5" width="3" height="14" rx="1.2" fill="currentColor" opacity="0.82"></rect>
+                <path d="M4 20h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity="0.65"></path>
+            </svg>
+        """,
+        "pie": """
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3a9 9 0 1 0 9 9h-9V3Z" fill="currentColor"></path>
+                <path d="M14 3.4A8.6 8.6 0 0 1 20.6 10H14V3.4Z" fill="currentColor" opacity="0.55"></path>
+            </svg>
+        """,
+        "bar": """
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="4" y="11" width="3.2" height="8" rx="1.1" fill="currentColor"></rect>
+                <rect x="10.4" y="7.5" width="3.2" height="11.5" rx="1.1" fill="currentColor" opacity="0.9"></rect>
+                <rect x="16.8" y="4.5" width="3.2" height="14.5" rx="1.1" fill="currentColor" opacity="0.8"></rect>
+            </svg>
+        """,
+        "time": """
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.8" fill="none"></circle>
+                <path d="M12 7.7v4.6l3.1 1.9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+        """,
+        "empty": """
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.8" fill="none"></circle>
+                <path d="M12 8v4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+                <circle cx="12" cy="16.8" r="1" fill="currentColor"></circle>
+            </svg>
+        """,
+    }
+    return icons.get(kind, icons["summary"])
+
+
 def _ensure_schema(cursor) -> None:
     cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
@@ -914,98 +954,483 @@ def df_behavior_charts(user_context: dict, filters: dict | None = None):
 
 
 def show_behavior_charts(user_context: dict):
-    st.title("📊 Gráficos Comportamentais")
-    st.caption("Análise comportamental vinculada à sessão de monitoramento, disciplina, turma e professor.")
+    st.markdown(
+        """
+        <style>
+        .charts-hero {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            margin: 0.1rem 0 1.1rem 0;
+        }
+        .charts-hero-main {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .charts-hero-icon {
+            width: 66px;
+            height: 66px;
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            background: linear-gradient(180deg, rgba(103,83,255,0.28) 0%, rgba(69,55,166,0.2) 100%);
+            border: 1px solid rgba(121,94,255,0.25);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+        }
+        .charts-title {
+            margin: 0;
+            color: #F4F7FB;
+            font-size: 2.1rem;
+            font-weight: 800;
+            line-height: 1.1;
+        }
+        .charts-subtitle {
+            margin: 0.35rem 0 0 0;
+            color: #A6AFBE;
+            font-size: 1rem;
+            line-height: 1.55;
+        }
+        .charts-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.65rem;
+            border-radius: 18px;
+            border: 1px solid rgba(107,93,255,0.34);
+            background: linear-gradient(180deg, rgba(36,40,68,0.96) 0%, rgba(26,29,50,0.98) 100%);
+            color: #DCE3F4;
+            padding: 0.95rem 1.1rem;
+            font-size: 0.98rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .charts-chip-dot {
+            color: #7B69FF;
+            font-size: 0.7rem;
+        }
+        .charts-section-card {
+            border: 1px solid rgba(107,93,255,0.22);
+            border-radius: 20px;
+            background: linear-gradient(180deg, rgba(20,24,36,0.96) 0%, rgba(16,20,30,0.99) 100%);
+            box-shadow: 0 16px 34px rgba(0,0,0,0.16);
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }
+        .charts-section-head {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            padding: 1rem 1.15rem;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .charts-section-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            color: #F5F7FB;
+            background: linear-gradient(180deg, #6F5BFF 0%, #4D38D2 100%);
+        }
+        .charts-section-icon svg,
+        .charts-card-mini-icon svg {
+            width: 18px;
+            height: 18px;
+            display: block;
+        }
+        .charts-section-title {
+            color: #F4F7FB;
+            font-size: 1.05rem;
+            font-weight: 800;
+            margin: 0;
+        }
+        .charts-card-mini-title {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            color: #F4F7FB;
+            font-size: 1rem;
+            font-weight: 800;
+            margin-bottom: 0.2rem;
+        }
+        .charts-card-mini-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 10px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(180deg, rgba(108,93,255,0.22) 0%, rgba(76,60,203,0.18) 100%);
+            color: #8E7BFF;
+            font-size: 0.92rem;
+            flex: 0 0 auto;
+        }
+        .charts-card-mini-subtitle {
+            color: #97A2B5;
+            margin-bottom: 0.35rem;
+        }
+        .charts-panel-body {
+            padding: 1rem 1rem 0.8rem 1rem;
+        }
+        .charts-info-note {
+            border-radius: 18px;
+            border: 1px solid rgba(69,107,214,0.22);
+            background: linear-gradient(180deg, rgba(23,48,92,0.46) 0%, rgba(18,38,72,0.34) 100%);
+            color: #9CC7FF;
+            padding: 1rem 1.1rem;
+            line-height: 1.5;
+            margin-top: 1rem;
+        }
+        .charts-filter-card {
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 22px;
+            background: linear-gradient(180deg, rgba(20,24,36,0.96) 0%, rgba(16,20,30,0.99) 100%);
+            box-shadow: 0 18px 36px rgba(0,0,0,0.18);
+            padding: 1.2rem 1.2rem 1rem 1.2rem;
+            margin-bottom: 1rem;
+        }
+        .charts-filter-title-row {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            margin-bottom: 0.65rem;
+        }
+        .charts-filter-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(180deg, #7B63FF 0%, #563DDF 100%);
+            color: white;
+            font-size: 1.1rem;
+        }
+        .charts-filter-heading {
+            color: #F4F7FB;
+            font-size: 1.05rem;
+            font-weight: 800;
+            margin: 0;
+        }
+        .charts-filter-subtitle {
+            color: #9AA4B6;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            margin: 0 0 0.8rem 0;
+        }
+        .charts-filter-divider {
+            height: 1px;
+            background: rgba(255,255,255,0.08);
+            margin: 0.8rem 0 1rem 0;
+        }
+        .charts-applied-box {
+            border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 18px;
+            background: rgba(255,255,255,0.02);
+            padding: 1rem;
+        }
+        .charts-applied-title {
+            color: #DDF8E9;
+            font-size: 1rem;
+            font-weight: 800;
+            margin-bottom: 0.85rem;
+        }
+        .charts-applied-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.8rem;
+            margin-bottom: 0.5rem;
+            color: #D4D9E5;
+            font-size: 0.95rem;
+        }
+        .charts-applied-row span:first-child {
+            color: #97A2B5;
+        }
+        .charts-tip-card {
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(56,40,111,0.4) 0%, rgba(33,24,67,0.32) 100%);
+            border: 1px solid rgba(124,95,255,0.14);
+            padding: 1rem;
+            color: #D6DBE8;
+            line-height: 1.55;
+        }
+        .charts-tip-title {
+            font-weight: 800;
+            color: #F4F7FB;
+            margin-bottom: 0.35rem;
+        }
+        @media (max-width: 1100px) {
+            .charts-hero {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .charts-chip {
+                white-space: normal;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     options = list_behavior_filter_options(user_context)
+    filter_title = "Filtros do professor" if user_context["role"] == "professor" else "Filtros globais"
+    state_prefix = "behavior_chart_filters"
+    selected_teacher_id = st.session_state.get(f"{state_prefix}_teacher_id")
+    selected_subject_id = st.session_state.get(f"{state_prefix}_subject_id")
+    selected_class_id = st.session_state.get(f"{state_prefix}_class_id")
+    selected_student_state = st.session_state.get(f"{state_prefix}_student")
+    selected_date_state = st.session_state.get(f"{state_prefix}_date")
+
+    left_col, right_col = st.columns([2.55, 1], gap="large")
+
+    def _render_charts_empty_state(title: str, message: str, student_label: str | None = None, date_label: str | None = None):
+        fallback_student = student_label or "Selecione um aluno"
+        fallback_date = date_label or pd.to_datetime(datetime.date.today()).strftime("%d/%m/%Y")
+        with left_col:
+            st.markdown(
+                f"""
+                <div class="charts-hero">
+                    <div class="charts-hero-main">
+                        <div class="charts-hero-icon">📊</div>
+                        <div>
+                            <h1 class="charts-title">Gráficos Comportamentais</h1>
+                            <p class="charts-subtitle">Análise comportamental vinculada à sessão de monitoramento, disciplina, turma e professor.</p>
+                        </div>
+                    </div>
+                    <div class="charts-chip">
+                        <span>📅</span>
+                        <span>Análise para:</span>
+                        <strong>{fallback_student}</strong>
+                        <span class="charts-chip-dot">●</span>
+                        <span>{fallback_date}</span>
+                    </div>
+                </div>
+                <div class="charts-section-card">
+                    <div class="charts-section-head">
+                        <div class="charts-section-icon">{_chart_icon_svg("empty")}</div>
+                        <div class="charts-section-title">{title}</div>
+                    </div>
+                    <div class="charts-panel-body">
+                        <div class="charts-info-note" style="margin-top:0;">
+                            {message}
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
     if options["students"].empty:
-        st.warning("Não há sessões monitoradas com episódios comportamentais para exibir.")
+        _render_charts_empty_state(
+            "Sem dados disponíveis",
+            "Ainda não há sessões monitoradas com episódios comportamentais suficientes para gerar gráficos.",
+        )
         return
 
-    filter_title = "Filtros do professor" if user_context["role"] == "professor" else "Filtros globais"
-    with st.container(border=True):
-        st.markdown(f"### {filter_title}")
-        st.caption("Refine os gráficos por disciplina, turma, aluno e data.")
+    with right_col:
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div class="charts-filter-title-row">
+                    <div class="charts-filter-icon">⏷</div>
+                    <div class="charts-filter-heading">{filter_title}</div>
+                </div>
+                <div class="charts-filter-subtitle">Refine os gráficos por disciplina, turma, aluno e data.</div>
+                <div class="charts-filter-divider"></div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-        selected_teacher_id = None
-        teacher_choice = "Todos"
-        if user_context["role"] == "admin" and not options["teachers"].empty:
-            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
-            with filter_col1:
+            teacher_choice = "Todos"
+            if user_context["role"] == "admin" and not options["teachers"].empty:
                 teacher_labels = {
                     int(row["id"]): row["nome"] for _, row in options["teachers"].iterrows()
                 }
-                teacher_choice = st.selectbox("Professor", ["Todos"] + list(teacher_labels.values()), index=0)
-                if teacher_choice != "Todos":
-                    selected_teacher_id = next(key for key, value in teacher_labels.items() if value == teacher_choice)
-        else:
-            filter_col1, filter_col2, filter_col3 = st.columns(3)
+                teacher_values = ["Todos"] + list(teacher_labels.values())
+                teacher_default = "Todos"
+                if selected_teacher_id in teacher_labels:
+                    teacher_default = teacher_labels[selected_teacher_id]
+                teacher_choice = st.selectbox(
+                    "Professor",
+                    teacher_values,
+                    index=teacher_values.index(teacher_default),
+                    key=f"{state_prefix}_teacher_choice",
+                )
+                selected_teacher_id = None if teacher_choice == "Todos" else next(
+                    key for key, value in teacher_labels.items() if value == teacher_choice
+                )
+            else:
+                selected_teacher_id = None
 
-        scoped_options = list_behavior_filter_options(
-            user_context,
-            filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
-        )
+            scoped_options = list_behavior_filter_options(
+                user_context,
+                filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
+            )
 
-        subject_map = {int(row["id"]): row["nome"] for _, row in scoped_options["subjects"].iterrows()}
-        with filter_col2 if user_context["role"] == "admin" else filter_col1:
-            subject_choice = st.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
-        selected_subject_id = None
-        if subject_choice != "Todas":
-            selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
+            subject_map = {int(row["id"]): row["nome"] for _, row in scoped_options["subjects"].iterrows()}
+            subject_values = ["Todas"] + list(subject_map.values())
+            subject_default = "Todas"
+            if selected_subject_id in subject_map:
+                subject_default = subject_map[selected_subject_id]
+            subject_choice = st.selectbox(
+                "Disciplina",
+                subject_values,
+                index=subject_values.index(subject_default),
+                key=f"{state_prefix}_subject_choice",
+            )
+            selected_subject_id = None if subject_choice == "Todas" else next(
+                key for key, value in subject_map.items() if value == subject_choice
+            )
 
-        scoped_options = list_behavior_filter_options(
-            user_context,
-            filters={
-                "teacher_id": selected_teacher_id,
-                "subject_id": selected_subject_id,
-            },
-        )
+            scoped_options = list_behavior_filter_options(
+                user_context,
+                filters={
+                    "teacher_id": selected_teacher_id,
+                    "subject_id": selected_subject_id,
+                },
+            )
 
-        class_map = {
-            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-            for _, row in scoped_options["classes"].iterrows()
-        }
-        with filter_col3 if user_context["role"] == "admin" else filter_col2:
-            class_choice = st.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
-        selected_class_id = None
-        if class_choice != "Todas":
-            selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
+            class_map = {
+                int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+                for _, row in scoped_options["classes"].iterrows()
+            }
+            class_values = ["Todas"] + list(class_map.values())
+            class_default = "Todas"
+            if selected_class_id in class_map:
+                class_default = class_map[selected_class_id]
+            class_choice = st.selectbox(
+                "Turma",
+                class_values,
+                index=class_values.index(class_default),
+                key=f"{state_prefix}_class_choice",
+            )
+            selected_class_id = None if class_choice == "Todas" else next(
+                key for key, value in class_map.items() if value == class_choice
+            )
 
-        scoped_options = list_behavior_filter_options(
-            user_context,
-            filters={
-                "teacher_id": selected_teacher_id,
-                "subject_id": selected_subject_id,
-                "class_id": selected_class_id,
-            },
-        )
-
-        student_options = scoped_options["students"]["student"].tolist()
-        if not student_options:
-            st.warning("Não há alunos com episódios para os filtros selecionados.")
-            return
-        with filter_col4 if user_context["role"] == "admin" else filter_col3:
-            selected_student = st.selectbox("Aluno", student_options, index=0)
-
-        available_dates = (
-            fetch_behavior_dataframe(
+            scoped_options = list_behavior_filter_options(
                 user_context,
                 filters={
                     "teacher_id": selected_teacher_id,
                     "subject_id": selected_subject_id,
                     "class_id": selected_class_id,
-                    "student_name": selected_student,
                 },
-            )["date"]
-            .dropna()
-            .sort_values()
-            .unique()
-            .tolist()
+            )
+
+            student_options = scoped_options["students"]["student"].tolist()
+            if not student_options:
+                _render_charts_empty_state(
+                    "Nenhum aluno encontrado",
+                    "Os filtros atuais não retornaram alunos com episódios comportamentais registrados. Ajuste a disciplina, turma ou data.",
+                    selected_student_state,
+                    pd.to_datetime(selected_date_state).strftime("%d/%m/%Y") if selected_date_state else None,
+                )
+                return
+            if selected_student_state not in student_options:
+                selected_student_state = student_options[0]
+            selected_student = st.selectbox(
+                "Aluno",
+                student_options,
+                index=student_options.index(selected_student_state),
+                key=f"{state_prefix}_student_choice",
+            )
+
+            available_dates = (
+                fetch_behavior_dataframe(
+                    user_context,
+                    filters={
+                        "teacher_id": selected_teacher_id,
+                        "subject_id": selected_subject_id,
+                        "class_id": selected_class_id,
+                        "student_name": selected_student,
+                    },
+                )["date"]
+                .dropna()
+                .sort_values()
+                .unique()
+                .tolist()
+            )
+            default_date = pd.to_datetime(available_dates[-1]).date() if available_dates else datetime.date.today()
+            if selected_date_state is not None:
+                try:
+                    selected_date_candidate = pd.to_datetime(selected_date_state).date()
+                except Exception:
+                    selected_date_candidate = default_date
+            else:
+                selected_date_candidate = default_date
+            selected_date = st.date_input(
+                "Data",
+                value=selected_date_candidate,
+                key=f"{state_prefix}_date_choice",
+            )
+
+            button_col1, button_col2 = st.columns(2, gap="small")
+            with button_col1:
+                apply_filters = st.button("Aplicar Filtros", type="primary", use_container_width=True)
+            with button_col2:
+                clear_filters = st.button("Limpar Filtros", use_container_width=True)
+
+            if clear_filters:
+                for key in (
+                    f"{state_prefix}_teacher_id",
+                    f"{state_prefix}_subject_id",
+                    f"{state_prefix}_class_id",
+                    f"{state_prefix}_student",
+                    f"{state_prefix}_date",
+                    f"{state_prefix}_teacher_choice",
+                    f"{state_prefix}_subject_choice",
+                    f"{state_prefix}_class_choice",
+                    f"{state_prefix}_student_choice",
+                    f"{state_prefix}_date_choice",
+                ):
+                    st.session_state.pop(key, None)
+                st.rerun()
+
+            if apply_filters or f"{state_prefix}_student" not in st.session_state:
+                st.session_state[f"{state_prefix}_teacher_id"] = selected_teacher_id
+                st.session_state[f"{state_prefix}_subject_id"] = selected_subject_id
+                st.session_state[f"{state_prefix}_class_id"] = selected_class_id
+                st.session_state[f"{state_prefix}_student"] = selected_student
+                st.session_state[f"{state_prefix}_date"] = selected_date.isoformat()
+
+            selected_teacher_id = st.session_state.get(f"{state_prefix}_teacher_id")
+            selected_subject_id = st.session_state.get(f"{state_prefix}_subject_id")
+            selected_class_id = st.session_state.get(f"{state_prefix}_class_id")
+            selected_student = st.session_state.get(f"{state_prefix}_student", selected_student)
+            selected_date = pd.to_datetime(st.session_state.get(f"{state_prefix}_date", selected_date.isoformat())).date()
+
+            applied_subject = subject_choice if selected_subject_id else "Todas"
+            applied_class = class_choice if selected_class_id else "Todas"
+
+            st.markdown(
+                f"""
+                <div class="charts-filter-divider"></div>
+                <div class="charts-applied-box">
+                    <div class="charts-applied-title">Filtros aplicados</div>
+                    <div class="charts-applied-row"><span>Disciplina:</span><span>{applied_subject}</span></div>
+                    <div class="charts-applied-row"><span>Turma:</span><span>{applied_class}</span></div>
+                    <div class="charts-applied-row"><span>Aluno:</span><span>{selected_student}</span></div>
+                    <div class="charts-applied-row"><span>Data:</span><span>{pd.to_datetime(selected_date).strftime("%d/%m/%Y")}</span></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        st.markdown(
+            """
+            <div class="charts-tip-card">
+                <div class="charts-tip-title">Dica</div>
+                Selecione os filtros desejados e clique em <strong>Aplicar Filtros</strong> para atualizar os gráficos.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        default_date = pd.to_datetime(available_dates[-1]).date() if available_dates else datetime.date.today()
-        date_cols = st.columns([1, 3])
-        with date_cols[0]:
-            selected_date = st.date_input("Data", value=default_date)
 
     df = fetch_behavior_dataframe(
         user_context,
@@ -1019,7 +1444,12 @@ def show_behavior_charts(user_context: dict):
         },
     )
     if df.empty:
-        st.warning("Sem dados para os filtros selecionados.")
+        _render_charts_empty_state(
+            "Nenhum registro no período",
+            "Não foram encontrados episódios comportamentais para os filtros aplicados. Tente alterar a data ou ampliar o escopo da disciplina e da turma.",
+            selected_student,
+            pd.to_datetime(selected_date).strftime("%d/%m/%Y"),
+        )
         return
 
     data_formatada = pd.to_datetime(selected_date).strftime("%d/%m/%Y")
@@ -1035,39 +1465,54 @@ def show_behavior_charts(user_context: dict):
     df_temporal["end_time"] = pd.to_datetime(df_temporal["end_time"])
 
     cores = {
-        "Atento": "royalblue",
-        "Perguntando": "red",
-        "Escrevendo": "orange",
-        "Dormindo": "purple",
-        "Agitado": "green",
-        "Em Pé": "gray",
-        "Distraido": "brown",
-        "Distraído": "brown",
+        "Atento": "#5C6CFF",
+        "Perguntando": "#FF7B6B",
+        "Escrevendo": "#F3A54A",
+        "Dormindo": "#8B5CF6",
+        "Agitado": "#2EC27E",
+        "Em Pé": "#8E97A9",
+        "Distraido": "#C17D48",
+        "Distraído": "#C17D48",
     }
-
     title_suffix = selected_student
     fig_pie = px.pie(
         df_behavior,
         values="total_minutes",
         names="behavior",
-        title=f"Distribuição do tempo por comportamento - {title_suffix} ({data_formatada})",
         hole=0.4,
         color_discrete_map=cores,
         labels={"behavior": "Comportamento", "total_minutes": "Tempo (minutos)"},
-        template="plotly_white",
+        template="plotly_dark",
+    )
+    fig_pie.update_layout(
+        title_text="",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#DCE3F4"),
+        margin=dict(l=10, r=10, t=10, b=10),
+        legend=dict(orientation="v", yanchor="middle", y=0.5, x=1.02, xanchor="left"),
     )
     fig_bar = px.bar(
         df_behavior,
         x="behavior",
         y="total_minutes",
-        title=f"Tempo total por comportamento - {title_suffix} ({data_formatada})",
         labels={"behavior": "Comportamento", "total_minutes": "Tempo (minutos)"},
         color="behavior",
         text="total_minutes",
         color_discrete_map=cores,
-        template="plotly_white",
+        template="plotly_dark",
     )
     fig_bar.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig_bar.update_layout(
+        title_text="",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#DCE3F4"),
+        margin=dict(l=10, r=10, t=10, b=20),
+        xaxis=dict(title=None, gridcolor="rgba(255,255,255,0.07)"),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+        showlegend=False,
+    )
 
     fig_timeline = px.timeline(
         df_temporal,
@@ -1076,11 +1521,20 @@ def show_behavior_charts(user_context: dict):
         y="behavior",
         color="behavior",
         color_discrete_map=cores,
-        title=f"Linha do tempo da aula - {title_suffix} ({data_formatada})",
         labels={"behavior": "Comportamento", "start_time": "Início", "end_time": "Fim"},
-        template="plotly_white",
+        template="plotly_dark",
     )
     fig_timeline.update_yaxes(autorange="reversed")
+    fig_timeline.update_layout(
+        title_text="",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#DCE3F4"),
+        margin=dict(l=10, r=10, t=10, b=20),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
+        legend_title_text="Comportamento",
+    )
 
     plotly_config = {
         "displaylogo": False,
@@ -1088,9 +1542,85 @@ def show_behavior_charts(user_context: dict):
         "toImageButtonOptions": {"format": "png", "scale": 2},
     }
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.plotly_chart(fig_pie, width="stretch", config=plotly_config)
-    with col2:
-        st.plotly_chart(fig_bar, width="stretch", config=plotly_config)
-    st.plotly_chart(fig_timeline, width="stretch", config=plotly_config)
+    with left_col:
+        st.markdown(
+            f"""
+            <div class="charts-hero">
+                <div class="charts-hero-main">
+                    <div class="charts-hero-icon">📊</div>
+                    <div>
+                        <h1 class="charts-title">Gráficos Comportamentais</h1>
+                        <p class="charts-subtitle">Análise comportamental vinculada à sessão de monitoramento, disciplina, turma e professor.</p>
+                    </div>
+                </div>
+                <div class="charts-chip">
+                    <span>📅</span>
+                    <span>Análise para:</span>
+                    <strong>{selected_student}</strong>
+                    <span class="charts-chip-dot">●</span>
+                    <span>{data_formatada}</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div class="charts-section-head" style="margin:-1rem -1rem 1rem -1rem;">
+                    <div class="charts-section-icon">{_chart_icon_svg("summary")}</div>
+                    <div class="charts-section-title">Resumo dos Comportamentos</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            col1, col2 = st.columns(2, gap="large")
+            with col1:
+                with st.container(border=True):
+                    st.markdown(
+                        f"""
+                        <div class="charts-card-mini-title">
+                            <span class="charts-card-mini-icon">{_chart_icon_svg("pie")}</span>
+                            <span>Distribuição do tempo por comportamento</span>
+                        </div>
+                        <div class="charts-card-mini-subtitle">{selected_student} • {data_formatada}</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    st.plotly_chart(fig_pie, width="stretch", config=plotly_config)
+            with col2:
+                with st.container(border=True):
+                    st.markdown(
+                        f"""
+                        <div class="charts-card-mini-title">
+                            <span class="charts-card-mini-icon">{_chart_icon_svg("bar")}</span>
+                            <span>Tempo total por comportamento</span>
+                        </div>
+                        <div class="charts-card-mini-subtitle">{selected_student} • {data_formatada}</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    st.plotly_chart(fig_bar, width="stretch", config=plotly_config)
+
+        with st.container(border=True):
+            st.markdown(
+                f"""
+                <div class="charts-section-head" style="margin:-1rem -1rem 1rem -1rem;">
+                    <div class="charts-section-icon">{_chart_icon_svg("time")}</div>
+                    <div class="charts-section-title">Linha do tempo da aula</div>
+                </div>
+                <div style='color:#97A2B5; margin-bottom:0.4rem;'>{selected_student} • {data_formatada}</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.plotly_chart(fig_timeline, width="stretch", config=plotly_config)
+
+        st.markdown(
+            """
+            <div class="charts-info-note">
+                Os gráficos apresentam somente os comportamentos registrados no período selecionado.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )

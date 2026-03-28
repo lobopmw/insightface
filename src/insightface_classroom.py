@@ -794,35 +794,118 @@ def _render_context_card(session_state_label: str, selected_subject_label: str, 
         elif end_time is not None:
             total_delta = end_time.to_pydatetime() - start_time.to_pydatetime()
 
-    rows = [
-        ("Disciplina", selected_subject_label or "-"),
-        ("Turma", selected_class_label or "-"),
-        ("Sessão ativa", f"ID da sessão: {session_data['id']}" if session_data and session_state_label == "Em andamento" else "-"),
-        ("Início", _format_datetime_br(start_time)),
-    ]
-    if session_state_label == "Em andamento":
-        rows.append(("Tempo decorrido", _format_duration_label(elapsed_delta)))
-    elif session_state_label == "Encerrado":
-        rows.append(("Término", _format_datetime_br(end_time)))
-        rows.append(("Duração total", _format_duration_label(total_delta)))
+    session_value = f"ID {session_data['id']}" if session_data and session_state_label == "Em andamento" else "-"
+    start_value = _format_datetime_br(start_time)
+    secondary_label = "Início"
+    secondary_value = start_value
+    if session_state_label == "Encerrado":
+        secondary_label = "Duração total"
+        secondary_value = _format_duration_label(total_delta)
 
-    lines = [
-        "<div style='border:1px solid rgba(255,255,255,0.08); border-radius:14px; padding:1rem 1rem 0.85rem 1rem;"
-        "background:rgba(255,255,255,0.02);'>",
-        "<div style='display:flex; align-items:center; justify-content:space-between; gap:0.75rem; margin-bottom:0.9rem;'>",
-        "<div style='font-size:1rem; font-weight:700;'>Contexto da Aula</div>",
-        _status_badge_markup(session_state_label),
-        "</div>",
-    ]
-    for label, value in rows:
-        lines.append(
-            "<div style='margin-bottom:0.75rem;'>"
-            f"<div style='font-size:0.78rem; color:#9aa0aa; margin-bottom:0.18rem;'>{label}</div>"
-            f"<div style='font-size:1.05rem; font-weight:600;'>{value}</div>"
-            "</div>"
-        )
-    lines.append("</div>")
-    st.markdown("".join(lines), unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="monitor-context-card">
+            <div class="monitor-card-head">
+                <div class="monitor-card-title-wrap">
+                    <div class="monitor-card-icon monitor-card-icon-neutral">▣</div>
+                    <div class="monitor-card-title">Contexto da Aula</div>
+                </div>
+                {_status_badge_markup(session_state_label)}
+            </div>
+            <div class="monitor-context-grid">
+                <div class="monitor-context-item">
+                    <div class="monitor-context-label">Disciplina</div>
+                    <div class="monitor-context-value">{html.escape(selected_subject_label or "-")}</div>
+                </div>
+                <div class="monitor-context-item">
+                    <div class="monitor-context-label">Turma</div>
+                    <div class="monitor-context-value">{html.escape(selected_class_label or "-")}</div>
+                </div>
+                <div class="monitor-context-item">
+                    <div class="monitor-context-label">Sessão ativa</div>
+                    <div class="monitor-context-value">{html.escape(session_value)}</div>
+                </div>
+                <div class="monitor-context-item">
+                    <div class="monitor-context-label">{secondary_label}</div>
+                    <div class="monitor-context-value">{html.escape(secondary_value)}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _get_monitor_video_snapshot(current_session=None) -> dict:
+    runtime = st.session_state.get("monitor_runtime")
+    video_stream = None if runtime is None else runtime.get("video_stream")
+    status = video_stream.get_status() if video_stream is not None and hasattr(video_stream, "get_status") else {}
+    frames_received = int(status.get("frames_received", 0) or 0)
+    live_stats = st.session_state.get("monitor_live_stats", {})
+
+    if current_session and current_session.get("status") == SESSION_STATUS_OPEN and current_session.get("start_time"):
+        start_time = pd.to_datetime(current_session["start_time"]).to_pydatetime()
+        duration = pd.Timestamp.now(tz=APP_TIMEZONE).tz_localize(None).to_pydatetime() - start_time
+        state_label = "Em andamento"
+        badge_text = "Sessão ativa"
+        badge_class = "live"
+    elif current_session and current_session.get("start_time") and current_session.get("end_time"):
+        start_time = pd.to_datetime(current_session["start_time"]).to_pydatetime()
+        end_time = pd.to_datetime(current_session["end_time"]).to_pydatetime()
+        duration = end_time - start_time
+        state_label = "Sessão encerrada"
+        badge_text = "Sessão encerrada"
+        badge_class = "ended"
+    else:
+        duration = datetime.timedelta(0)
+        state_label = "Aguardando início"
+        badge_text = "Aguardando início"
+        badge_class = "waiting"
+
+    return {
+        "frames_received": frames_received,
+        "recognized_now": int(live_stats.get("recognized_faces_count", 0) or 0),
+        "detected_now": int(live_stats.get("detected_faces_count", 0) or 0),
+        "duration_label": _format_duration_label(duration),
+        "state_label": state_label,
+        "badge_text": badge_text,
+        "badge_class": badge_class,
+    }
+
+
+@st.fragment(run_every=1.0)
+def render_monitor_video_summary_fragment(current_session_id=None):
+    current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
+    video_snapshot = _get_monitor_video_snapshot(current_session)
+    st.markdown(
+        f"""
+        <div class="monitor-video-head" style="padding:0 0 1rem 0; border-bottom:none;">
+            <div class="monitor-card-title-wrap">
+                <div class="monitor-card-icon monitor-card-icon-purple">📷</div>
+                <div class="monitor-card-title">Vídeo de Monitoramento</div>
+            </div>
+            <div class="monitor-video-badge {video_snapshot['badge_class']}">
+                <span>●</span>
+                <span>{html.escape(video_snapshot['badge_text'])}</span>
+            </div>
+        </div>
+        <div class="monitor-video-metrics" style="padding:0 0 1rem 0;">
+            <div class="monitor-metric-box">
+                <div class="monitor-metric-label">Status</div>
+                <div class="monitor-metric-value">{html.escape(video_snapshot['state_label'])}</div>
+            </div>
+            <div class="monitor-metric-box">
+                <div class="monitor-metric-label">Duração da sessão</div>
+                <div class="monitor-metric-value">{html.escape(video_snapshot['duration_label'])}</div>
+            </div>
+            <div class="monitor-metric-box">
+                <div class="monitor-metric-label">Alunos reconhecidos agora</div>
+                <div class="monitor-metric-value">{video_snapshot['recognized_now']}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 @st.fragment(run_every=1.0)
@@ -853,6 +936,11 @@ def process_monitor_fragment(
 
     frame = None
     frame_id = 0
+    st.session_state["monitor_live_stats"] = {
+        "detected_faces_count": 0,
+        "recognized_faces_count": 0,
+        "rendered_tracks_count": 0,
+    }
     if video_stream is not None:
         if hasattr(video_stream, "read_with_meta"):
             frame, frame_id, _ = video_stream.read_with_meta()
@@ -1072,6 +1160,11 @@ def process_monitor_fragment(
         status_placeholder.empty()
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    st.session_state["monitor_live_stats"] = {
+        "detected_faces_count": detected_faces_count,
+        "recognized_faces_count": recognized_faces_count,
+        "rendered_tracks_count": rendered_tracks_count,
+    }
     frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
     return True
 
@@ -1873,45 +1966,43 @@ def recognition_behavior():
         st.markdown(
             """
             <style>
+            .monitor-page-shell {
+                margin-top: 0.2rem;
+            }
+            .monitor-page-hero {
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+                margin: 0.15rem 0 1.35rem 0;
+            }
+            .monitor-page-hero-icon {
+                width: 64px;
+                height: 64px;
+                border-radius: 18px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: linear-gradient(180deg, rgba(104,84,255,0.24) 0%, rgba(63,50,145,0.18) 100%);
+                border: 1px solid rgba(126,107,255,0.24);
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+            }
+            .monitor-page-hero-icon svg {
+                width: 40px;
+                height: 40px;
+                display: block;
+            }
             .monitor-page-title {
                 margin: 0;
-                font-size: 1.7rem;
+                font-size: 2rem;
                 line-height: 1.1;
                 font-weight: 800;
                 letter-spacing: 0.01em;
             }
-            .monitor-header-wrap {
-                margin-bottom: 0.4rem;
-            }
-            .monitor-header-compact {
-                display: flex;
-                align-items: center;
-                gap: 0.9rem;
-                margin: 0.1rem 0 0.35rem 0;
-            }
-            .monitor-header-icon img {
-                display: block;
-                width: 74px;
-                height: auto;
-            }
-            .monitor-header-text {
-                display: flex;
-                align-items: center;
-                gap: 0.75rem;
-                flex-wrap: wrap;
-                min-width: 0;
-            }
-            .monitor-placeholder-header {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 0.9rem;
-                margin: 0 0 0.8rem 0;
-            }
-            .monitor-placeholder-header img {
-                width: 58px;
-                height: auto;
-                display: block;
+            .monitor-page-subtitle {
+                margin: 0.32rem 0 0 0;
+                color: #A7B0C0;
+                font-size: 1rem;
+                line-height: 1.5;
             }
             .monitor-layout {
                 margin-top: 0;
@@ -1919,35 +2010,222 @@ def recognition_behavior():
             .monitor-layout [data-testid="column"] > div {
                 height: 100%;
             }
-            .monitor-right-panel {
-                margin-top: 0;
+            .monitor-card {
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 18px;
+                background: linear-gradient(180deg, rgba(21,25,36,0.94) 0%, rgba(17,21,31,0.98) 100%);
+                box-shadow: 0 16px 34px rgba(0,0,0,0.16);
+                padding: 1.2rem 1.2rem 1.1rem 1.2rem;
+                margin-bottom: 1rem;
             }
-            .monitor-section-title {
+            .monitor-card-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.9rem;
+                margin-bottom: 1rem;
+            }
+            .monitor-card-title-wrap {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                min-width: 0;
+            }
+            .monitor-card-icon {
+                width: 40px;
+                height: 40px;
+                border-radius: 12px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.1rem;
+                color: #F5F7FB;
+                flex: 0 0 auto;
+            }
+            .monitor-card-icon-purple {
+                background: linear-gradient(180deg, #6E58FF 0%, #4A36C9 100%);
+            }
+            .monitor-card-icon-neutral {
+                background: linear-gradient(180deg, rgba(94,102,121,0.3) 0%, rgba(56,63,79,0.32) 100%);
+                color: #B8C1D3;
+            }
+            .monitor-card-icon-green {
+                background: linear-gradient(180deg, #1F9B61 0%, #147446 100%);
+            }
+            .monitor-card-title {
+                font-size: 1.06rem;
+                font-weight: 800;
+                color: #F4F7FB;
                 margin: 0;
-                font-size: 1.38rem;
-                line-height: 1.15;
+            }
+            .monitor-field-gap {
+                margin-top: 0.35rem;
+            }
+            .monitor-context-card {
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 18px;
+                background: linear-gradient(180deg, rgba(21,25,36,0.94) 0%, rgba(17,21,31,0.98) 100%);
+                box-shadow: 0 16px 34px rgba(0,0,0,0.16);
+                padding: 1.2rem;
+            }
+            .monitor-context-grid {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 0.9rem 1rem;
+            }
+            .monitor-context-item {
+                border-top: 1px solid rgba(255,255,255,0.06);
+                padding-top: 0.85rem;
+            }
+            .monitor-context-label {
+                color: #8F9AAF;
+                font-size: 0.82rem;
+                margin-bottom: 0.2rem;
+            }
+            .monitor-context-value {
+                color: #F5F7FB;
+                font-size: 1rem;
                 font-weight: 700;
             }
-            .monitor-live-badge-row {
+            .monitor-tip-box {
+                border-radius: 16px;
+                padding: 0.95rem 1rem;
+                background: linear-gradient(180deg, rgba(55,34,111,0.42) 0%, rgba(34,22,66,0.34) 100%);
+                border: 1px solid rgba(124,95,255,0.14);
+                color: #D4D9E6;
+                line-height: 1.55;
+            }
+            .monitor-tip-title {
+                font-size: 1rem;
+                font-weight: 800;
+                color: #F4F7FB;
+                margin-bottom: 0.28rem;
+            }
+            .monitor-video-card {
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 20px;
+                background: linear-gradient(180deg, rgba(21,25,36,0.94) 0%, rgba(17,21,31,0.98) 100%);
+                box-shadow: 0 16px 34px rgba(0,0,0,0.18);
+                overflow: hidden;
+            }
+            .monitor-video-head {
                 display: flex;
-                justify-content: center;
-                margin: 0.3rem 0 0.55rem 0;
+                align-items: center;
+                justify-content: space-between;
+                gap: 1rem;
+                padding: 1.15rem 1.2rem;
+                border-bottom: 1px solid rgba(255,255,255,0.06);
+            }
+            .monitor-video-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.45rem;
+                padding: 0.42rem 0.9rem;
+                border-radius: 999px;
+                font-size: 0.86rem;
+                font-weight: 700;
+            }
+            .monitor-video-badge.waiting {
+                color: #49D17F;
+                background: rgba(28,132,75,0.16);
+                border: 1px solid rgba(46,176,101,0.26);
+            }
+            .monitor-video-badge.live {
+                color: #49D17F;
+                background: rgba(28,132,75,0.16);
+                border: 1px solid rgba(46,176,101,0.26);
+            }
+            .monitor-video-badge.ended {
+                color: #FFCC73;
+                background: rgba(168,112,22,0.16);
+                border: 1px solid rgba(226,163,65,0.24);
+            }
+            .monitor-video-metrics {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 0.8rem;
+                padding: 1rem 1.2rem 0.25rem 1.2rem;
+            }
+            .monitor-metric-box {
+                border-radius: 16px;
+                background: rgba(255,255,255,0.025);
+                border: 1px solid rgba(255,255,255,0.05);
+                padding: 0.85rem 0.95rem;
+            }
+            .monitor-metric-label {
+                color: #95A0B4;
+                font-size: 0.86rem;
+                margin-bottom: 0.18rem;
+            }
+            .monitor-metric-value {
+                color: #F5F7FB;
+                font-size: 1.05rem;
+                font-weight: 800;
+            }
+            .monitor-video-stage {
+                padding: 1rem 1.2rem 1.2rem 1.2rem;
             }
             .monitor-video-shell {
-                margin-top: 0;
+                min-height: 430px;
+                border-radius: 20px;
+                border: 2px dashed rgba(124,95,255,0.46);
+                background: linear-gradient(180deg, rgba(14,18,28,0.9) 0%, rgba(17,21,31,0.96) 100%);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                overflow: hidden;
+            }
+            .monitor-placeholder {
+                min-height: 430px;
+                border-radius: 20px;
+                border: 2px dashed rgba(124,95,255,0.46);
+                background: linear-gradient(180deg, rgba(14,18,28,0.9) 0%, rgba(17,21,31,0.96) 100%);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 2rem 1.4rem;
+            }
+            .monitor-placeholder-icon {
+                width: 88px;
+                height: 88px;
+                margin: 0 auto 1.2rem auto;
+                border-radius: 999px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 2rem;
+                background: linear-gradient(180deg, rgba(106,82,255,0.28) 0%, rgba(74,56,175,0.24) 100%);
+                color: #8E7BFF;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+            }
+            .monitor-placeholder-title {
+                color: #F4F7FB;
+                font-size: 1.75rem;
+                font-weight: 800;
+                margin-bottom: 0.5rem;
+            }
+            .monitor-placeholder-subtitle {
+                color: #A8B1C0;
+                font-size: 1rem;
+                line-height: 1.55;
+            }
+            .monitor-info-bar {
+                margin: 0 1.2rem 1.2rem 1.2rem;
+                border-radius: 16px;
+                background: linear-gradient(180deg, rgba(26,57,104,0.46) 0%, rgba(20,44,84,0.36) 100%);
+                border: 1px solid rgba(68,126,214,0.18);
+                color: #8FC0FF;
+                padding: 0.95rem 1rem;
+                line-height: 1.5;
             }
             @media (max-width: 1100px) {
-                .monitor-header-compact {
+                .monitor-page-hero {
                     align-items: flex-start;
                 }
-                .monitor-header-icon img {
-                    width: 56px;
-                }
-                .monitor-placeholder-header img {
-                    width: 48px;
-                }
-                .monitor-right-panel {
-                    margin-top: 0;
+                .monitor-video-metrics,
+                .monitor-context-grid {
+                    grid-template-columns: 1fr;
                 }
             }
             </style>
@@ -1976,45 +2254,80 @@ def recognition_behavior():
         header_is_live = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
         selected_subject_id = monitor_state.get("selected_subject_id")
         selected_class_id = monitor_state.get("selected_class_id")
+        video_snapshot = _get_monitor_video_snapshot(current_session_preview)
+
+        st.markdown(
+            """
+            <div class="monitor-page-shell">
+                <div class="monitor-page-hero">
+                    <div class="monitor-page-hero-icon" aria-hidden="true">
+                        <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M33 10C24.2 10 17 17.2 17 26V30.2C17 33.4 15.8 36.5 13.7 38.9L11.8 41.1C10.3 42.8 11.5 45.5 13.8 45.5H52.2C54.5 45.5 55.7 42.8 54.2 41.1L52.3 38.9C50.2 36.5 49 33.4 49 30.2V26C49 17.2 41.8 10 33 10Z" fill="#E9EEF9" fill-opacity="0.96"/>
+                            <path d="M24.5 45.5C25.5 50.2 29 53 33 53C37 53 40.5 50.2 41.5 45.5H24.5Z" fill="#DCE4F4"/>
+                            <path d="M23 22.5C25.8 18.2 30.2 15.8 35.2 15.8C37.4 15.8 39.6 16.3 41.5 17.2" stroke="#B9C5DA" stroke-width="3" stroke-linecap="round"/>
+                            <path d="M16.2 21.8C18 18.7 20.7 16.1 23.9 14.4" stroke="#8AAAF6" stroke-width="3.2" stroke-linecap="round"/>
+                            <circle cx="45.5" cy="17.5" r="2.8" fill="#6E58FF"/>
+                            <path d="M29 48.6C30.1 50.3 31.4 51.1 33 51.1C34.6 51.1 35.9 50.3 37 48.6" stroke="#B7C3D9" stroke-width="2.6" stroke-linecap="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="monitor-page-title">Monitoramento em Tempo Real</h1>
+                        <p class="monitor-page-subtitle">Acompanhe a sessão da turma selecionada.</p>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         last_closed_session = st.session_state.get("last_closed_monitoring_session")
         st.markdown("<div class='monitor-layout'>", unsafe_allow_html=True)
-        monitor_left_col, monitor_right_col = st.columns([0.92, 2.58], gap="large")
+        monitor_left_col, monitor_right_col = st.columns([1.02, 2.05], gap="large")
         with monitor_left_col:
-            subject_options = {int(row["id"]): row["nome"] for _, row in subjects_df.iterrows()}
-            default_subject_index = 0
-            if selected_subject_id in subject_options:
-                default_subject_index = list(subject_options.keys()).index(selected_subject_id)
-            disable_scope_inputs = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
-            selected_subject_label = st.selectbox(
-                "Disciplina da aula",
-                list(subject_options.values()),
-                index=default_subject_index,
-                disabled=disable_scope_inputs,
-            )
-            selected_subject_id = next(key for key, value in subject_options.items() if value == selected_subject_label)
-            monitor_state["selected_subject_id"] = selected_subject_id
+            with st.container(border=True):
+                st.markdown(
+                    """
+                    <div class="monitor-card-head" style="margin-bottom:0.85rem;">
+                        <div class="monitor-card-title-wrap">
+                            <div class="monitor-card-icon monitor-card-icon-neutral">☷</div>
+                            <div class="monitor-card-title">Seleção da Sessão</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                subject_options = {int(row["id"]): row["nome"] for _, row in subjects_df.iterrows()}
+                default_subject_index = 0
+                if selected_subject_id in subject_options:
+                    default_subject_index = list(subject_options.keys()).index(selected_subject_id)
+                disable_scope_inputs = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
+                selected_subject_label = st.selectbox(
+                    "Disciplina da aula",
+                    list(subject_options.values()),
+                    index=default_subject_index,
+                    disabled=disable_scope_inputs,
+                )
+                selected_subject_id = next(key for key, value in subject_options.items() if value == selected_subject_label)
+                monitor_state["selected_subject_id"] = selected_subject_id
 
-            classes_df = list_classes_for_user(user_context, selected_subject_id)
-            if classes_df.empty:
-                st.warning("Nenhuma turma vinculada à disciplina selecionada foi encontrada para este professor.")
-                return
+                classes_df = list_classes_for_user(user_context, selected_subject_id)
+                if classes_df.empty:
+                    st.warning("Nenhuma turma vinculada à disciplina selecionada foi encontrada para este professor.")
+                    return
 
-            class_options = {
-                int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-                for _, row in classes_df.iterrows()
-            }
-            default_class_index = 0
-            if selected_class_id in class_options:
-                default_class_index = list(class_options.keys()).index(selected_class_id)
-            selected_class_label = st.selectbox(
-                "Turma acompanhada",
-                list(class_options.values()),
-                index=default_class_index,
-                disabled=disable_scope_inputs,
-            )
-            selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
-            monitor_state["selected_class_id"] = selected_class_id
+                class_options = {
+                    int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+                    for _, row in classes_df.iterrows()
+                }
+                default_class_index = 0
+                if selected_class_id in class_options:
+                    default_class_index = list(class_options.keys()).index(selected_class_id)
+                selected_class_label = st.selectbox(
+                    "Turma acompanhada",
+                    list(class_options.values()),
+                    index=default_class_index,
+                    disabled=disable_scope_inputs,
+                )
+                selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
+                monitor_state["selected_class_id"] = selected_class_id
 
             if not professor_has_assignment(user_context["teacher_id"], selected_subject_id, selected_class_id):
                 st.error("O professor autenticado não possui vínculo com a disciplina e a turma selecionadas.")
@@ -2036,47 +2349,43 @@ def recognition_behavior():
             else:
                 session_panel = None
 
-            st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
             if ui_state == "Em andamento":
                 render_context_fragment(ui_state, selected_subject_label, selected_class_label, session_panel)
             else:
                 _render_context_card(ui_state, selected_subject_label, selected_class_label, session_panel)
-            st.markdown("<div style='height:0.85rem;'></div>", unsafe_allow_html=True)
 
-            if ui_state == "Em andamento":
-                live_badge_markup = (
-                    "<span style='display:inline-flex; align-items:center; gap:0.35rem; padding:0.22rem 0.72rem; "
-                    "border-radius:999px; background:rgba(61,220,151,0.14); border:1px solid rgba(61,220,151,0.35); "
-                    "color:#3DDC97; font-size:0.82rem; font-weight:700;'>AO VIVO</span>"
-                    if header_is_live
-                    else ""
-                )
+            with st.container(border=True):
                 st.markdown(
-                    f"""
-                    <div class='monitor-header-wrap'>
-                      <div class='monitor-header-compact'>
-                        <div class='monitor-header-icon'>
-                          <img src="data:image/png;base64,{img_to_base64(image_path_cam)}" alt="Camera de monitoramento" />
+                    """
+                    <div class="monitor-card-head" style="margin-bottom:0.85rem;">
+                        <div class="monitor-card-title-wrap">
+                            <div class="monitor-card-icon monitor-card-icon-neutral">⎋</div>
+                            <div class="monitor-card-title">Ações</div>
                         </div>
-                        <div class='monitor-header-text'>
-                          <div class='monitor-page-title'>Video de Monitoramento</div>
-                          {live_badge_markup}
-                        </div>
-                      </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
-            if ui_state == "Não iniciado":
-                run_system = st.button("Iniciar monitoramento", type="primary", use_container_width=True)
-                stop_system = False
-            elif ui_state == "Em andamento":
-                run_system = False
-                stop_system = st.button("Encerrar monitoramento", use_container_width=True)
-            else:
-                run_system = st.button("Iniciar nova sessão", type="primary", use_container_width=True)
-                stop_system = False
+                if ui_state == "Não iniciado":
+                    run_system = st.button("▶ Iniciar Monitoramento", type="primary", use_container_width=True)
+                    stop_system = st.button("■ Finalizar Sessão", disabled=True, use_container_width=True)
+                elif ui_state == "Em andamento":
+                    run_system = False
+                    stop_system = st.button("■ Encerrar Monitoramento", use_container_width=True)
+                else:
+                    run_system = st.button("▶ Iniciar nova sessão", type="primary", use_container_width=True)
+                    stop_system = st.button("■ Finalizar Sessão", disabled=True, use_container_width=True)
+
+                st.markdown(
+                    """
+                    <div class="monitor-tip-box" style="margin-top:1rem;">
+                        <div class="monitor-tip-title">Como funciona?</div>
+                        Ao iniciar, o sistema começará a capturar e analisar os comportamentos automaticamente.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
         current_session_id = monitor_state.get("session_id")
         current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
@@ -2152,44 +2461,47 @@ def recognition_behavior():
             st.rerun()
 
         with monitor_right_col:
-            st.markdown("<div class='monitor-right-panel'>", unsafe_allow_html=True)
-            if current_session:
-                st.markdown("<div class='monitor-video-shell'>", unsafe_allow_html=True)
-                monitor_status_placeholder = st.empty()
-                monitor_frame_placeholder = st.empty()
-                st.markdown("</div>", unsafe_allow_html=True)
-                process_monitor_fragment(
-                    school=school,
-                    discipline=current_session["subject_name"],
-                    user_name=user_name,
-                    confidence_threshold=CONFIDENCE_THRESHOLD,
-                    show_debug=show_debug,
-                    debug_font=debug_font,
-                    box_margin_ratio=BOX_MARGIN_RATIO,
-                    show_unknown_boxes=show_unknown_boxes,
-                    status_placeholder=monitor_status_placeholder,
-                    frame_placeholder=monitor_frame_placeholder,
-                )
-            else:
-                st.markdown(
-                    f"""
-                    <div class='monitor-placeholder-header'>
-                      <img src="data:image/png;base64,{img_to_base64(image_path_cam)}" alt="Camera de monitoramento" />
-                      <h3 class='monitor-section-title'>Vídeo de Monitoramento</h3>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+            with st.container(border=True):
+                render_monitor_video_summary_fragment(current_session_id)
+                if current_session:
+                    with st.container(border=True):
+                        monitor_status_placeholder = st.empty()
+                        monitor_frame_placeholder = st.empty()
+                        process_monitor_fragment(
+                            school=school,
+                            discipline=current_session["subject_name"],
+                            user_name=user_name,
+                            confidence_threshold=CONFIDENCE_THRESHOLD,
+                            show_debug=show_debug,
+                            debug_font=debug_font,
+                            box_margin_ratio=BOX_MARGIN_RATIO,
+                            show_unknown_boxes=show_unknown_boxes,
+                            status_placeholder=monitor_status_placeholder,
+                            frame_placeholder=monitor_frame_placeholder,
+                        )
+                else:
+                    st.markdown(
+                        """
+                        <div class="monitor-placeholder">
+                            <div>
+                                <div class="monitor-placeholder-icon">📷</div>
+                                <div class="monitor-placeholder-title">Tela de Monitoramento</div>
+                                <div class="monitor-placeholder-subtitle">
+                                    O vídeo da câmera será exibido aqui após o início da sessão.
+                                </div>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
                 st.markdown(
                     """
-                    <div style="min-height: 420px; border: 1px dashed rgba(255,255,255,0.18); border-radius: 12px;
-                    display:flex; align-items:center; justify-content:center; color:#9aa0aa;">
-                    A tela do monitoramento aparecerá aqui após o início da sessão.
+                    <div class="monitor-info-bar" style="margin:1rem 0 0 0;">
+                        A captura e a análise comportamental serão iniciadas automaticamente.
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
-            st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         if stop_system and current_session_id:
