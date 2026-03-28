@@ -1,5 +1,6 @@
 
 import base64
+import html
 import os
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
@@ -34,7 +35,7 @@ from control_database_postgres import (
     show_behavior_charts,
     upsert_student,
 )
-from register_face_multi_images_avg import load_insightface_data
+from register_face_multi_images_avg import generate_student_embedding, load_insightface_data
 from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image
 from insightface.app import FaceAnalysis
@@ -89,6 +90,563 @@ FACE_RECOGNITION_BASE_THRESHOLD = 0.45
 FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.41
 FACE_RECOGNITION_SMALL_THRESHOLD = 0.37
 FACE_RECOGNITION_MIN_MARGIN = 0.015
+
+CAPTURE_POSE_LABELS = {
+    "frontal": "Frontal",
+    "lateral_esquerda": "Esquerda",
+    "lateral_direita": "Direita",
+    "cabeca_baixa": "Perfil",
+}
+
+
+def _normalize_student_name(value: str) -> str:
+    return " ".join((value or "").strip().split())
+
+
+def _normalize_student_registration(value: str) -> str:
+    return "".join((value or "").strip().split())
+
+
+def _validate_student_registration_fields(name: str, matricula: str) -> list[str]:
+    errors = []
+    normalized_name = _normalize_student_name(name)
+    normalized_matricula = _normalize_student_registration(matricula)
+
+    letter_count = sum(char.isalpha() for char in normalized_name)
+    digit_count_name = sum(char.isdigit() for char in normalized_name)
+
+    if len(normalized_name) < 3:
+        errors.append("Informe o nome completo do aluno com pelo menos 3 caracteres.")
+    if letter_count < 2:
+        errors.append("O campo nome deve conter letras suficientes para identificar o aluno.")
+    if digit_count_name > 0 and letter_count <= digit_count_name:
+        errors.append("O campo nome parece conter uma matrícula. Revise os campos antes de continuar.")
+
+    if not normalized_matricula:
+        errors.append("Informe a matrícula do aluno.")
+    elif not normalized_matricula.isdigit():
+        errors.append("O campo matrícula deve conter apenas números.")
+    elif len(normalized_matricula) < 3:
+        errors.append("A matrícula deve ter pelo menos 3 dígitos.")
+
+    return errors
+
+
+def _inject_student_registration_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .student-reg-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin: 0.15rem 0 1.15rem 0;
+        }
+        .student-reg-icon {
+            width: 68px;
+            height: 68px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.2rem;
+            background: linear-gradient(180deg, rgba(90,128,255,0.24) 0%, rgba(55,84,168,0.16) 100%);
+            border: 1px solid rgba(128,155,255,0.22);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+        }
+        .student-reg-title {
+            margin: 0;
+            font-size: 2.05rem;
+            line-height: 1.08;
+            font-weight: 800;
+            color: #F5F7FB;
+        }
+        .student-reg-subtitle {
+            margin: 0.28rem 0 0 0;
+            color: #A9B1BF;
+            font-size: 1rem;
+            line-height: 1.55;
+        }
+        .student-reg-card-title {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            margin-bottom: 0.9rem;
+        }
+        .student-reg-card-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.15rem;
+            color: white;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.12);
+        }
+        .student-reg-card-heading {
+            margin: 0;
+            font-size: 1.08rem;
+            font-weight: 800;
+            color: #F5F7FB;
+        }
+        .student-reg-card-sub {
+            margin: 0;
+            color: #95A0B2;
+            font-size: 0.92rem;
+        }
+        .student-reg-step-shell {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.85rem 1rem;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(255,255,255,0.05);
+            margin-bottom: 0.95rem;
+        }
+        .student-reg-step {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            min-width: 0;
+        }
+        .student-reg-step-circle {
+            width: 32px;
+            height: 32px;
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.92rem;
+            font-weight: 700;
+            background: rgba(255,255,255,0.07);
+            color: #B5BDC9;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+        .student-reg-step.active .student-reg-step-circle {
+            background: linear-gradient(180deg, #2B92FF 0%, #2C69E3 100%);
+            color: white;
+            border-color: rgba(90, 163, 255, 0.6);
+        }
+        .student-reg-step-label {
+            color: #AEB6C3;
+            font-size: 0.95rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .student-reg-step.active .student-reg-step-label {
+            color: #F4F7FB;
+        }
+        .student-reg-step-line {
+            flex: 1 1 auto;
+            height: 2px;
+            min-width: 28px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 999px;
+        }
+        .student-reg-info {
+            border-radius: 14px;
+            border: 1px solid rgba(49,140,255,0.16);
+            background: linear-gradient(180deg, rgba(22,66,132,0.34) 0%, rgba(18,42,86,0.28) 100%);
+            padding: 0.9rem 1rem;
+            margin-bottom: 1rem;
+            color: #75B4FF;
+            line-height: 1.55;
+            font-size: 0.95rem;
+        }
+        .student-reg-side-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.85rem;
+            margin-bottom: 0.85rem;
+        }
+        .student-reg-mini {
+            border-radius: 14px;
+            background: rgba(255,255,255,0.028);
+            border: 1px solid rgba(255,255,255,0.06);
+            padding: 0.9rem 0.95rem;
+        }
+        .student-reg-mini-label {
+            color: #9AA5B8;
+            font-size: 0.88rem;
+            margin-bottom: 0.25rem;
+        }
+        .student-reg-mini-value {
+            color: #F5F7FB;
+            font-size: 1.02rem;
+            font-weight: 700;
+        }
+        .student-reg-progress-track {
+            width: 100%;
+            height: 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.06);
+            overflow: hidden;
+            margin-top: 0.7rem;
+        }
+        .student-reg-progress-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #2D93FF 0%, #58B7FF 100%);
+        }
+        .student-reg-pose-list {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.55rem;
+            margin: 0.9rem 0 1rem 0;
+        }
+        .student-reg-pose-pill {
+            border-radius: 14px;
+            padding: 0.72rem 0.45rem;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.025);
+        }
+        .student-reg-pose-pill.active {
+            border-color: rgba(70,151,255,0.35);
+            background: linear-gradient(180deg, rgba(34,80,155,0.26) 0%, rgba(22,45,88,0.18) 100%);
+        }
+        .student-reg-pose-num {
+            width: 28px;
+            height: 28px;
+            border-radius: 999px;
+            margin: 0 auto 0.35rem auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.84rem;
+            font-weight: 700;
+            background: rgba(255,255,255,0.08);
+            color: #B8C0CC;
+        }
+        .student-reg-pose-pill.active .student-reg-pose-num {
+            background: linear-gradient(180deg, #2B92FF 0%, #2C69E3 100%);
+            color: white;
+        }
+        .student-reg-pose-label {
+            color: #B3BCC9;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        .student-reg-pose-pill.active .student-reg-pose-label {
+            color: #F4F7FB;
+        }
+        .student-reg-lock {
+            color: #96A0AF;
+            font-size: 0.92rem;
+            margin-top: 0.8rem;
+        }
+        .student-reg-camera-wrap {
+            margin-top: 1rem;
+        }
+        .student-reg-camera-placeholder {
+            min-height: 360px;
+            border: 1px dashed rgba(109, 101, 255, 0.34);
+            border-radius: 18px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #A6AFBD;
+            text-align: center;
+            padding: 1.2rem;
+            background: linear-gradient(180deg, rgba(62,43,118,0.13) 0%, rgba(23,27,38,0.18) 100%);
+        }
+        .student-reg-camera-icon {
+            width: 62px;
+            height: 62px;
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(180deg, rgba(102,83,255,0.4) 0%, rgba(88,67,219,0.3) 100%);
+            margin-bottom: 0.85rem;
+            font-size: 1.6rem;
+            color: #ECEBFF;
+        }
+        @media (max-width: 1100px) {
+            .student-reg-pose-list {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .student-reg-side-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_student_registration_header() -> None:
+    st.markdown(
+        """
+        <div class="student-reg-header">
+            <div class="student-reg-icon">📸</div>
+            <div>
+                <h1 class="student-reg-title">Cadastro de Alunos</h1>
+                <p class="student-reg-subtitle">Preencha os dados do aluno e capture as poses para habilitar o monitoramento.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_student_registration_card_header(icon: str, title: str, subtitle: str, gradient: str) -> None:
+    st.markdown(
+        (
+            "<div class='student-reg-card-title'>"
+            f"<div class='student-reg-card-icon' style='background:{gradient};'>{html.escape(icon)}</div>"
+            "<div>"
+            f"<p class='student-reg-card-heading'>{html.escape(title)}</p>"
+            f"<p class='student-reg-card-sub'>{html.escape(subtitle)}</p>"
+            "</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_student_registration_stepper(active_step: int) -> None:
+    first_class = "student-reg-step active" if active_step == 1 else "student-reg-step"
+    second_class = "student-reg-step active" if active_step == 2 else "student-reg-step"
+    st.markdown(
+        (
+            "<div class='student-reg-step-shell'>"
+            f"<div class='{first_class}'>"
+            "<div class='student-reg-step-circle'>1</div>"
+            "<div class='student-reg-step-label'>Identificação</div>"
+            "</div>"
+            "<div class='student-reg-step-line'></div>"
+            f"<div class='{second_class}'>"
+            "<div class='student-reg-step-circle'>2</div>"
+            "<div class='student-reg-step-label'>Captura de Poses</div>"
+            "</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_capture_pose_list(pose_index: int, poses: list[str]) -> None:
+    items = []
+    for idx, pose in enumerate(poses, start=1):
+        css_class = "student-reg-pose-pill active" if idx - 1 == pose_index else "student-reg-pose-pill"
+        items.append(
+            f"<div class='{css_class}'>"
+            f"<div class='student-reg-pose-num'>{idx}</div>"
+            f"<div class='student-reg-pose-label'>{html.escape(CAPTURE_POSE_LABELS.get(pose, pose.title()))}</div>"
+            "</div>"
+        )
+    st.markdown(f"<div class='student-reg-pose-list'>{''.join(items)}</div>", unsafe_allow_html=True)
+
+
+def _inject_sidebar_menu_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] > div:first-child {
+            background:
+                radial-gradient(circle at top left, rgba(78, 92, 140, 0.20), transparent 28%),
+                linear-gradient(180deg, #141824 0%, #10141E 100%);
+        }
+        [data-testid="stSidebar"] {
+            border-right: 1px solid rgba(255,255,255,0.04);
+        }
+        .sidebar-shell {
+            padding: 0.25rem 0.15rem 0.4rem 0.15rem;
+        }
+        .sidebar-hero-img {
+            width: 100%;
+            border-radius: 24px;
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 18px 40px rgba(0,0,0,0.22);
+            margin-bottom: 1rem;
+            display: block;
+        }
+        .sidebar-profile {
+            display: flex;
+            align-items: center;
+            gap: 0.9rem;
+            padding: 0.3rem 0 0.85rem 0;
+        }
+        .sidebar-avatar {
+            width: 62px;
+            height: 62px;
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.65rem;
+            background: linear-gradient(180deg, #6C7BFF 0%, #5A48E1 100%);
+            box-shadow: inset 0 8px 18px rgba(255,255,255,0.16), 0 10px 28px rgba(72, 54, 176, 0.28);
+        }
+        .sidebar-profile-name {
+            margin: 0;
+            font-size: 1.15rem;
+            line-height: 1.1;
+            color: #F4F6FB;
+            font-weight: 800;
+        }
+        .sidebar-profile-role {
+            margin: 0.28rem 0 0 0;
+            color: #A3ABBB;
+            font-size: 0.95rem;
+        }
+        .sidebar-profile-divider {
+            height: 1px;
+            background: rgba(255,255,255,0.08);
+            margin: 0.25rem 0 0.95rem 0;
+        }
+        .sidebar-menu-label {
+            margin: 0.2rem 0 0.55rem 0;
+            color: #8E97A9;
+            font-size: 0.8rem;
+            letter-spacing: 0.28em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] {
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            width: 100%;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center;
+            position: relative;
+            border-radius: 22px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(180deg, rgba(28,33,46,0.92) 0%, rgba(22,27,39,0.96) 100%);
+            padding: 0.95rem 4rem 0.95rem 1.1rem;
+            margin: 0 0 0.8rem 0;
+            transition: all 0.2s ease;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.16);
+            width: 100%;
+            min-width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            min-height: 112px;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+            border-color: rgba(117, 103, 255, 0.24);
+            transform: translateY(-1px);
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+            border-color: rgba(115, 100, 255, 0.34);
+            background: linear-gradient(180deg, rgba(33,36,66,0.96) 0%, rgba(26,28,51,0.96) 100%);
+            box-shadow: 0 14px 30px rgba(53, 45, 110, 0.22);
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked)::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 14px;
+            bottom: 14px;
+            width: 4px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, #7E6BFF 0%, #6553E8 100%);
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label::after {
+            content: "›";
+            position: absolute;
+            right: 1.2rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #8F98AA;
+            font-size: 2.15rem;
+            line-height: 1;
+            font-weight: 500;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked)::after {
+            color: #7E6BFF;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label > div:first-child {
+            display: none;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label > div:last-child {
+            width: 100%;
+            display: block;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label p {
+            white-space: pre-line;
+            margin: 0;
+            line-height: 1.32;
+            color: #BCC4D2;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label p::first-line {
+            color: #F3F6FA;
+            font-size: 1.18rem;
+            font-weight: 800;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label p {
+            letter-spacing: 0.005em;
+        }
+        .sidebar-help-box {
+            margin-top: 1rem;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.07);
+            background: linear-gradient(180deg, rgba(25,30,43,0.88) 0%, rgba(20,24,35,0.94) 100%);
+            padding: 0.95rem 1rem;
+            width: 100%;
+            min-width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            display: block;
+        }
+        .sidebar-help-title {
+            color: #D5DAE3;
+            font-size: 0.96rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+        .sidebar-help-subtitle {
+            color: #929CAF;
+            font-size: 0.92rem;
+            line-height: 1.45;
+        }
+        [data-testid="stSidebar"] .stButton > button {
+            min-height: 54px;
+            border-radius: 18px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: linear-gradient(180deg, rgba(30,33,52,0.94) 0%, rgba(21,24,38,0.96) 100%);
+            color: #FFFFFF;
+            font-size: 1.35rem;
+            font-weight: 700;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+        }
+        [data-testid="stSidebar"] .stButton > button:hover {
+            border-color: rgba(255,255,255,0.22);
+            color: #FFFFFF;
+        }
+        .sidebar-help-row {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }
+        .sidebar-help-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 999px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid rgba(116, 86, 255, 0.8);
+            color: #8B70FF;
+            font-size: 1.15rem;
+            font-weight: 800;
+            flex: 0 0 auto;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def img_to_base64(path: str) -> str:
@@ -828,36 +1386,93 @@ def criptografar_nome_matricula(nome, matricula):
 def recognition_behavior():
     school = DEFAULT_SCHOOL_NAME
 
-    st.sidebar.image(image_path_classroom, width="stretch")
+    _inject_sidebar_menu_styles()
     user_context = st.session_state.get("user_context") or {}
     user_name = user_context.get("name", st.session_state.get("name", "Usuário"))
     user_role = user_context.get("role", st.session_state.get("role", "professor"))
-    st.sidebar.markdown(f"**{user_name}**")
-    st.sidebar.caption(f"Perfil: {user_role}")
+    profile_role_label = "Professor(a)" if user_role == "professor" else "Administrador(a)"
+    teacher_menu = ["Cadastro de Alunos", "Monitoramento", "Gráficos", "Relatórios"]
+    admin_menu = ["Usuários", "Gráficos", "Relatórios"]
+    raw_menu_options = admin_menu if user_role == "admin" else teacher_menu
+    menu_labels = {
+        "Cadastro de Alunos": "🧑‍🎓    Cadastro de Alunos\nGerencie alunos e cadastros",
+        "Monitoramento": "📹    Monitoramento\nAcompanhe as sessões em tempo real",
+        "Gráficos": "📈    Gráficos\nVisualize dados e estatísticas",
+        "Relatórios": "🗂️    Relatórios\nAcesse análises e relatórios observacionais",
+        "Usuários": "🛠️    Usuários\nGerencie contas e manutenção do sistema",
+    }
+    menu_display_options = [menu_labels[option] for option in raw_menu_options]
+    menu_widget_key = "sidebar_menu_display"
+    if st.session_state.get(menu_widget_key) not in menu_display_options:
+        st.session_state[menu_widget_key] = menu_labels[raw_menu_options[0]]
 
-    if st.sidebar.button("Sair"):
+    st.sidebar.markdown("<div class='sidebar-shell'>", unsafe_allow_html=True)
+    st.sidebar.markdown(
+        f"<img class='sidebar-hero-img' src='data:image/png;base64,{img_to_base64(image_path_classroom)}' alt='Sala de aula' />",
+        unsafe_allow_html=True,
+    )
+    profile_col, logout_col = st.sidebar.columns([4.2, 1])
+    with profile_col:
+        st.markdown(
+            f"""
+            <div class="sidebar-profile">
+                <div class="sidebar-avatar">🎓</div>
+                <div>
+                    <p class="sidebar-profile-name">{html.escape(user_name)}</p>
+                    <p class="sidebar-profile-role">{html.escape(profile_role_label)}</p>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with logout_col:
+        logout_clicked = st.button("⇥", key="sidebar_logout_button", use_container_width=True)
+    st.sidebar.markdown("<div class='sidebar-profile-divider'></div>", unsafe_allow_html=True)
+    st.sidebar.markdown("<div class='sidebar-menu-label'>Menu</div>", unsafe_allow_html=True)
+    menu_display_selected = st.sidebar.radio(
+        "Menu",
+        menu_display_options,
+        key=menu_widget_key,
+        label_visibility="collapsed",
+    )
+    menu_option = next(key for key, value in menu_labels.items() if value == menu_display_selected)
+    st.session_state["current_menu_option"] = menu_option
+
+    if logout_clicked:
         for key in ("authenticated", "cpf", "name", "city", "state", "role"):
             if key in st.query_params:
                 del st.query_params[key]
         st.session_state.clear()
         st.rerun()
-
-    teacher_menu = ["Cadastro de Alunos", "Monitoramento", "Gráficos", "Relatórios"]
-    admin_menu = ["Usuários", "Gráficos", "Relatórios"]
-    menu_option = st.sidebar.radio("Menu", admin_menu if user_role == "admin" else teacher_menu)
+    st.sidebar.markdown(
+        """
+        <div class="sidebar-help-box">
+            <div class="sidebar-help-row">
+                <div class="sidebar-help-icon">i</div>
+                <div>
+                    <div class="sidebar-help-title">Sistema de Monitoramento Comportamental</div>
+                    <div class="sidebar-help-subtitle">Turmas A • IA-2026</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.sidebar.markdown("</div>", unsafe_allow_html=True)
 
     # ------------------ CADASTRO ------------------
     if menu_option == "Cadastro de Alunos":
-        st.title("📸 Cadastro de Alunos")
+        _inject_student_registration_styles()
+        _render_student_registration_header()
         allowed_classes_df = list_classes_for_user(user_context)
         if allowed_classes_df.empty:
             st.warning("Nenhuma turma vinculada ao professor foi encontrada. Cadastre os vínculos no banco antes de usar esta tela.")
             return
 
         # Parâmetros da captura automática
-        IMAGENS_POR_POSE = st.number_input("Imagens por pose", 1, 30, 10, 1)
-        capture_interval = st.slider("Intervalo entre fotos (segundos)", 0.2, 3.0, 0.8, 0.1)
-        prep_seconds     = st.slider("Contagem inicial (segundos)", 0, 5, 2, 1)
+        IMAGENS_POR_POSE = 10
+        capture_interval = 0.8
+        prep_seconds = 2
 
         POSES = ["frontal", "lateral_direita", "lateral_esquerda", "cabeca_baixa"]
 
@@ -873,10 +1488,46 @@ def recognition_behavior():
         if registration_done:
             ultimo_nome = st.session_state.get("last_cad_nome", "")
             ultima_mat  = st.session_state.get("last_cad_matricula", "")
+            ultimo_hash = st.session_state.get("last_cad_hash", "")
+            embedding_status = st.session_state.get("last_embedding_status")
+            embedding_message = st.session_state.get("last_embedding_message", "")
+
+            if ultimo_hash and embedding_status is None:
+                with st.spinner("Gerando embedding facial do aluno..."):
+                    success, message = generate_student_embedding(
+                        ultimo_hash,
+                        ultimo_nome,
+                        ultima_mat or None,
+                    )
+                st.session_state["last_embedding_status"] = success
+                st.session_state["last_embedding_message"] = message
+                teardown_monitor_runtime()
+                st.session_state.pop("student_lookup", None)
+                st.rerun()
+
             if ultimo_nome or ultima_mat:
                 st.success(f"✅ Cadastro concluído para **{ultimo_nome}** (Matrícula **{ultima_mat}**).")
             else:
                 st.success("✅ Cadastro concluído.")
+
+            if embedding_status:
+                st.success(embedding_message or "Embedding facial gerado com sucesso.")
+            elif embedding_status is False:
+                st.error(embedding_message or "Não foi possível gerar o embedding facial do aluno.")
+
+            if ultimo_hash and st.button("🔄 Reprocessar embedding deste aluno", use_container_width=False):
+                with st.spinner("Reprocessando embedding facial do aluno..."):
+                    success, message = generate_student_embedding(
+                        ultimo_hash,
+                        ultimo_nome,
+                        ultima_mat or None,
+                    )
+                st.session_state["last_embedding_status"] = success
+                st.session_state["last_embedding_message"] = message
+                teardown_monitor_runtime()
+                st.session_state.pop("student_lookup", None)
+                st.rerun()
+
             if st.button("✅ Finalizar cadastro"):
                 if 'cadastro_cap' in st.session_state:
                     try: st.session_state.cadastro_cap.release()
@@ -884,7 +1535,8 @@ def recognition_behavior():
                     del st.session_state['cadastro_cap']
 
                 for k in ["pose_index","img_index","cap_running","next_time","pose_done",
-                          "registration_done","last_cad_nome","last_cad_matricula"]:
+                          "registration_done","last_cad_nome","last_cad_matricula","last_cad_hash",
+                          "last_embedding_status","last_embedding_message"]:
                     st.session_state.pop(k, None)
 
                 st.session_state.cad_nome = ""
@@ -894,19 +1546,164 @@ def recognition_behavior():
                 st.rerun()
             st.stop()
 
-        # Entradas
-        class_options = {
-            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-            for _, row in allowed_classes_df.iterrows()
-        }
-        selected_class_label = st.selectbox("👥 Selecione a Turma:", list(class_options.values()))
-        selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
-        nome_aluno  = st.text_input("Nome do Aluno:", key="cad_nome")
-        matricula   = st.text_input("Matrícula do Aluno:", key="cad_matricula")
+        pose_index = max(0, min(pose_index, len(POSES) - 1))
+        pose_atual = POSES[pose_index]
+        left_col, right_col = st.columns([1.05, 1.25], gap="large")
+        with left_col:
+            with st.container(border=True):
+                _render_student_registration_card_header(
+                    "👤",
+                    "Dados do Aluno",
+                    "Preencha os dados principais para iniciar o cadastro.",
+                    "linear-gradient(180deg, #4BA3FF 0%, #1F73D8 100%)",
+                )
+                _render_student_registration_stepper(1)
+                st.markdown(
+                    "<div class='student-reg-info'>Selecione a turma e informe os dados do aluno para iniciar o cadastro.</div>",
+                    unsafe_allow_html=True,
+                )
+                class_options = {
+                    int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+                    for _, row in allowed_classes_df.iterrows()
+                }
+                selected_class_label = st.selectbox("Turma", list(class_options.values()))
+                selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
 
-        if nome_aluno and matricula:
-            nome_criptografado = salvar_mapeamento(nome_aluno, matricula)
-            upsert_student(nome_criptografado, nome_aluno.strip(), str(matricula).strip(), selected_class_id)
+                form_col1, form_col2 = st.columns(2, gap="large")
+                with form_col1:
+                    nome_aluno = st.text_input("Nome do Aluno", key="cad_nome", placeholder="Digite o nome completo")
+                with form_col2:
+                    matricula = st.text_input("Matrícula", key="cad_matricula", placeholder="Digite a matrícula")
+
+                nome_norm = _normalize_student_name(nome_aluno)
+                matr_norm = _normalize_student_registration(matricula)
+                registration_errors = _validate_student_registration_fields(nome_aluno, matricula) if nome_aluno or matricula else []
+                registration_ready = bool(nome_norm and matr_norm and not registration_errors)
+
+                if registration_errors:
+                    for error in registration_errors:
+                        st.warning(error)
+
+                with st.expander("Configurações da captura (opcional)", expanded=False):
+                    settings_col1, settings_col2 = st.columns(2, gap="large")
+                    with settings_col1:
+                        IMAGENS_POR_POSE = st.number_input("Número de poses por etapa", 1, 30, IMAGENS_POR_POSE, 1)
+                    with settings_col2:
+                        capture_interval = st.select_slider(
+                            "Qualidade mínima",
+                            options=[0.4, 0.8, 1.2, 1.6],
+                            value=capture_interval,
+                            format_func=lambda value: {
+                                0.4: "Muito alta",
+                                0.8: "Alta (recomendado)",
+                                1.2: "Média",
+                                1.6: "Econômica",
+                            }[value],
+                        )
+                    prep_seconds = st.slider("Contagem inicial (segundos)", 0, 5, prep_seconds, 1)
+
+                if not nome_norm and not matr_norm:
+                    st.markdown(
+                        "<div style='border-radius:14px; padding:0.9rem 1rem; margin-top:0.9rem; "
+                        "background:linear-gradient(180deg, rgba(72,50,148,0.32) 0%, rgba(48,32,95,0.28) 100%); "
+                        "border:1px solid rgba(121,94,255,0.14); color:#C9C3FF;'>"
+                        "<strong>Passo 1 de 2</strong><br/>Após preencher os dados, clique em <strong>Iniciar captura</strong> para começar."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif not registration_ready:
+                    st.info("Revise os campos informados para liberar a captura das imagens.")
+                else:
+                    st.success("Dados validados. A captura já pode ser iniciada.")
+
+        with right_col:
+            with st.container(border=True):
+                _render_student_registration_card_header(
+                    "📷",
+                    "Controle da Captura",
+                    "Acompanhe a pose atual e avance ao concluir cada etapa.",
+                    "linear-gradient(180deg, #159957 0%, #0E7A46 100%)",
+                )
+                progress_percent = int((img_index / max(IMAGENS_POR_POSE, 1)) * 100)
+                pose_label = CAPTURE_POSE_LABELS.get(pose_atual, pose_atual.replace("_", " ").title())
+                mini_col1, mini_col2 = st.columns(2, gap="large")
+                with mini_col1:
+                    st.markdown(
+                        f"<div class='student-reg-mini'><div class='student-reg-mini-label'>Pose atual</div>"
+                        f"<div class='student-reg-mini-value'>{html.escape(pose_label)}</div>"
+                        "<div class='student-reg-progress-track'><div class='student-reg-progress-fill' style='width:100%; "
+                        "background:linear-gradient(90deg, #1B9E5A 0%, #39C875 100%);'></div></div></div>",
+                        unsafe_allow_html=True,
+                    )
+                with mini_col2:
+                    st.markdown(
+                        f"<div class='student-reg-mini'><div class='student-reg-mini-label'>Progresso</div>"
+                        f"<div class='student-reg-mini-value'>{img_index} / {IMAGENS_POR_POSE} imagens</div>"
+                        f"<div class='student-reg-progress-track'><div class='student-reg-progress-fill' style='width:{progress_percent}%;'></div></div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+                st.markdown(
+                    f"<div class='student-reg-mini' style='margin-top:0.85rem;'><div class='student-reg-mini-label'>Etapa</div>"
+                    f"<div class='student-reg-mini-value'>Etapa {pose_index + 1} de {len(POSES)}</div></div>",
+                    unsafe_allow_html=True,
+                )
+                _render_capture_pose_list(pose_index, POSES)
+
+                if pose_done:
+                    st.markdown(
+                        "<div class='student-reg-info' style='color:#83D9A1; border-color:rgba(39,194,110,0.16); "
+                        "background:linear-gradient(180deg, rgba(18,85,54,0.32) 0%, rgba(15,58,39,0.22) 100%);'>"
+                        "Pose concluída. Você já pode avançar para a próxima etapa."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif cap_running:
+                    st.markdown(
+                        "<div class='student-reg-info'>Captura em andamento. Aguarde a conclusão automática desta pose.</div>",
+                        unsafe_allow_html=True,
+                    )
+                elif registration_ready:
+                    st.markdown(
+                        "<div class='student-reg-info'>Preenchimento validado. Você já pode iniciar a captura das poses.</div>",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        "<div class='student-reg-info'>Preencha os dados do aluno para habilitar a captura das poses.</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                button_col1, button_col2, button_col3 = st.columns(3)
+                with button_col1:
+                    start_btn = st.button(
+                        "▶️ Iniciar Captura",
+                        disabled=(not registration_ready) or cap_running or pose_done,
+                        use_container_width=True,
+                    )
+                with button_col2:
+                    cancel_btn = st.button(
+                        "⏹️ Cancelar",
+                        disabled=(not registration_ready) or (not cap_running),
+                        use_container_width=True,
+                    )
+                with button_col3:
+                    next_btn = st.button(
+                        "➡️ Próximo",
+                        disabled=(not registration_ready)
+                        or st.session_state.get("cap_running", False)
+                        or not st.session_state.get("pose_done", False),
+                        use_container_width=True,
+                    )
+
+                st.markdown(
+                    "<div class='student-reg-lock'>Os botões serão habilitados automaticamente após a validação dos dados.</div>",
+                    unsafe_allow_html=True,
+                )
+
+        if registration_ready:
+            nome_criptografado = salvar_mapeamento(nome_norm, matr_norm)
+            upsert_student(nome_criptografado, nome_norm, matr_norm, selected_class_id)
 
             os.makedirs(DATABASE_PATH, exist_ok=True)
             pasta_base = os.path.join(DATABASE_PATH, nome_criptografado)
@@ -919,8 +1716,6 @@ def recognition_behavior():
                 pd.DataFrame(columns=["nome", "matricula", "hash"]).to_csv(MAPPING_CSV, index=False)
 
             df = pd.read_csv(MAPPING_CSV)
-            nome_norm = str(nome_aluno).strip()
-            matr_norm = str(matricula).strip()
             mask = (df["nome"].astype(str).str.strip() == nome_norm) & \
                    (df["matricula"].astype(str).str.strip() == matr_norm)
             if mask.any():
@@ -933,26 +1728,36 @@ def recognition_behavior():
             df = df.drop_duplicates(subset=["nome", "matricula"], keep="first")
             df.to_csv(MAPPING_CSV, index=False)
 
-            pose_index = max(0, min(pose_index, len(POSES) - 1))
-            pose_atual = POSES[pose_index]
-            st.subheader(f"👉 Pose atual: **{pose_atual.replace('_',' ').title()}**  ({img_index}/{IMAGENS_POR_POSE})")
+            with right_col:
+                if st.button("🔄 Atualizar embedding deste aluno", use_container_width=True):
+                    with st.spinner("Processando embedding facial do aluno..."):
+                        success, message = generate_student_embedding(
+                            nome_criptografado,
+                            nome_norm,
+                            matr_norm,
+                        )
+                    if success:
+                        st.success(message)
+                        teardown_monitor_runtime()
+                        st.session_state.pop("student_lookup", None)
+                    else:
+                        st.error(message)
 
             # Preview
+            st.markdown("<div class='student-reg-camera-wrap'>", unsafe_allow_html=True)
+            with st.container(border=True):
+                _render_student_registration_card_header(
+                    "📷",
+                    "Câmera de captura",
+                    "A visualização da câmera é exibida abaixo durante a coleta das poses.",
+                    "linear-gradient(180deg, #5F49D6 0%, #4633A8 100%)",
+                )
             stframe = st.empty()
             if 'cadastro_cap' not in st.session_state:
                 st.session_state.cadastro_cap = cv2.VideoCapture(0)
                 st.session_state.cadastro_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
                 st.session_state.cadastro_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             cap = st.session_state.cadastro_cap
-
-            cols = st.columns(3)
-            with cols[0]:
-                start_btn = st.button("▶️ Iniciar captura desta pose", disabled=cap_running or pose_done)
-            with cols[1]:
-                cancel_btn = st.button("⏹️ Cancelar captura", disabled=not cap_running)
-            with cols[2]:
-                next_btn = st.button("➡️ Próximo",
-                    disabled=st.session_state.get("cap_running", False) or not st.session_state.get("pose_done", False))
 
             if start_btn:
                 st.session_state.cap_running = True
@@ -978,6 +1783,9 @@ def recognition_behavior():
                     st.session_state.registration_done = True
                     st.session_state.last_cad_nome = nome_norm
                     st.session_state.last_cad_matricula = matr_norm
+                    st.session_state.last_cad_hash = nome_criptografado
+                    st.session_state.last_embedding_status = None
+                    st.session_state.last_embedding_message = ""
                     st.session_state.cap_running = False
                     st.session_state.pose_done   = False
                     st.session_state.next_time   = None
@@ -1000,7 +1808,7 @@ def recognition_behavior():
                                 (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
                     cv2.putText(overlay, f"Proxima em: {restante:0.1f}s",
                                 (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0), 2)
-                    stframe.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), channels="RGB", width=480)
+                    stframe.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), channels="RGB", width=900)
 
                     if now >= (st.session_state.next_time or now):
                         timestamp    = get_local_now().strftime("%Y%m%d_%H%M%S%f")
@@ -1019,6 +1827,9 @@ def recognition_behavior():
                                 st.session_state.registration_done = True
                                 st.session_state.last_cad_nome = nome_norm
                                 st.session_state.last_cad_matricula = matr_norm
+                                st.session_state.last_cad_hash = nome_criptografado
+                                st.session_state.last_embedding_status = None
+                                st.session_state.last_embedding_message = ""
                                 st.rerun()
                             else:
                                 st.success(
@@ -1030,9 +1841,27 @@ def recognition_behavior():
             else:
                 ret, frame = cap.read()
                 if ret:
-                    stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width=480)
+                    stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width=900)
+            st.markdown("</div>", unsafe_allow_html=True)
         else:
-            st.warning("Preencha a turma, o nome e a matrícula do aluno para iniciar a captura.")
+            with st.container(border=True):
+                _render_student_registration_card_header(
+                    "📷",
+                    "Câmera de captura",
+                    "A câmera será exibida aqui após a validação do cadastro.",
+                    "linear-gradient(180deg, #5F49D6 0%, #4633A8 100%)",
+                )
+                preview_placeholder = st.empty()
+                preview_placeholder.markdown(
+                    """
+                    <div class="student-reg-camera-placeholder">
+                        <div class="student-reg-camera-icon">📷</div>
+                        <div style="font-size:1.55rem; color:#E5E8F1; margin-bottom:0.45rem;">A visualização da câmera será exibida aqui</div>
+                        <div style="font-size:1rem; color:#A6AFBD;">A captura é liberada automaticamente após validar o nome e a matrícula.</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
     # ------------------ MONITORAMENTO ------------------
     elif menu_option == "Monitoramento":
@@ -1126,47 +1955,11 @@ def recognition_behavior():
             unsafe_allow_html=True,
         )
 
-        CONFIDENCE_THRESHOLD = st.sidebar.slider("Confiança Mínima", 0.10, 0.80, 0.35, 0.05)
-        use_gpu = st.sidebar.checkbox("Usar GPU (CUDA)", value=True)
-        runtime_info = get_runtime_diagnostics()
-        cuda_available = runtime_info["torch_cuda_available"]
-        device = "cuda" if use_gpu and cuda_available else "cpu"
-        st.sidebar.write(f"Dispositivo: {device}")
-
-        if use_gpu and not cuda_available:
-            st.sidebar.warning(
-                "CUDA foi solicitada, mas o processo atual nao enxerga GPU. "
-                "O app continuara em CPU."
-            )
-
-        with st.sidebar.expander("Diagnostico CUDA"):
-            st.caption(f"Python: `{runtime_info['python']}`")
-            st.caption(
-                f"PyTorch: `{runtime_info['torch_version']}` | "
-                f"CUDA build: `{runtime_info['torch_cuda_version']}`"
-            )
-            st.caption(
-                f"torch.cuda.is_available(): `{runtime_info['torch_cuda_available']}` | "
-                f"GPUs visiveis: `{runtime_info['torch_device_count']}`"
-            )
-            st.caption(f"GPU 0: `{runtime_info['torch_device_name']}`")
-            st.caption(
-                f"ONNX Runtime: `{runtime_info['onnxruntime_version']}` | "
-                f"Providers: `{', '.join(runtime_info['onnxruntime_providers'])}`"
-            )
-            st.caption(
-                f"NVIDIA_VISIBLE_DEVICES: `{runtime_info['nvidia_visible_devices']}`"
-            )
-            st.caption(
-                "NVIDIA_DRIVER_CAPABILITIES: "
-                f"`{runtime_info['nvidia_driver_capabilities']}`"
-            )
-
-        # HUD de debug no canto esquerdo
-        with st.sidebar.expander("Debug de exibicao"):
-            show_debug = st.toggle("Mostrar debug (Dormindo)", value=False)
-            show_unknown_boxes = st.toggle("Mostrar desconhecidos", value=False)
-            debug_font = st.slider("Tamanho fonte debug", 0.4, 2.0, 0.8, 0.1)
+        CONFIDENCE_THRESHOLD = 0.35
+        show_debug = False
+        show_unknown_boxes = False
+        debug_font = 0.8
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         BOX_MARGIN_RATIO = 0.2
         if user_role != "professor":
             st.info("O monitoramento operacional está disponível apenas para o perfil professor.")

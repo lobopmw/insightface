@@ -922,78 +922,90 @@ def show_behavior_charts(user_context: dict):
         st.warning("Não há sessões monitoradas com episódios comportamentais para exibir.")
         return
 
-    sidebar_title = "Filtros do professor" if user_context["role"] == "professor" else "Filtros globais"
-    st.sidebar.header(sidebar_title)
+    filter_title = "Filtros do professor" if user_context["role"] == "professor" else "Filtros globais"
+    with st.container(border=True):
+        st.markdown(f"### {filter_title}")
+        st.caption("Refine os gráficos por disciplina, turma, aluno e data.")
 
-    selected_teacher_id = None
-    if user_context["role"] == "admin" and not options["teachers"].empty:
-        teacher_labels = {
-            int(row["id"]): row["nome"] for _, row in options["teachers"].iterrows()
+        selected_teacher_id = None
+        teacher_choice = "Todos"
+        if user_context["role"] == "admin" and not options["teachers"].empty:
+            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+            with filter_col1:
+                teacher_labels = {
+                    int(row["id"]): row["nome"] for _, row in options["teachers"].iterrows()
+                }
+                teacher_choice = st.selectbox("Professor", ["Todos"] + list(teacher_labels.values()), index=0)
+                if teacher_choice != "Todos":
+                    selected_teacher_id = next(key for key, value in teacher_labels.items() if value == teacher_choice)
+        else:
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+
+        scoped_options = list_behavior_filter_options(
+            user_context,
+            filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
+        )
+
+        subject_map = {int(row["id"]): row["nome"] for _, row in scoped_options["subjects"].iterrows()}
+        with filter_col2 if user_context["role"] == "admin" else filter_col1:
+            subject_choice = st.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
+        selected_subject_id = None
+        if subject_choice != "Todas":
+            selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
+
+        scoped_options = list_behavior_filter_options(
+            user_context,
+            filters={
+                "teacher_id": selected_teacher_id,
+                "subject_id": selected_subject_id,
+            },
+        )
+
+        class_map = {
+            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+            for _, row in scoped_options["classes"].iterrows()
         }
-        teacher_choice = st.sidebar.selectbox("Professor", ["Todos"] + list(teacher_labels.values()), index=0)
-        if teacher_choice != "Todos":
-            selected_teacher_id = next(key for key, value in teacher_labels.items() if value == teacher_choice)
+        with filter_col3 if user_context["role"] == "admin" else filter_col2:
+            class_choice = st.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
+        selected_class_id = None
+        if class_choice != "Todas":
+            selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
 
-    scoped_options = list_behavior_filter_options(
-        user_context,
-        filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
-    )
-
-    subject_map = {int(row["id"]): row["nome"] for _, row in scoped_options["subjects"].iterrows()}
-    subject_choice = st.sidebar.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
-    selected_subject_id = None
-    if subject_choice != "Todas":
-        selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
-
-    scoped_options = list_behavior_filter_options(
-        user_context,
-        filters={
-            "teacher_id": selected_teacher_id,
-            "subject_id": selected_subject_id,
-        },
-    )
-
-    class_map = {
-        int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-        for _, row in scoped_options["classes"].iterrows()
-    }
-    class_choice = st.sidebar.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
-    selected_class_id = None
-    if class_choice != "Todas":
-        selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
-
-    scoped_options = list_behavior_filter_options(
-        user_context,
-        filters={
-            "teacher_id": selected_teacher_id,
-            "subject_id": selected_subject_id,
-            "class_id": selected_class_id,
-        },
-    )
-
-    student_options = scoped_options["students"]["student"].tolist()
-    if not student_options:
-        st.warning("Não há alunos com episódios para os filtros selecionados.")
-        return
-    selected_student = st.sidebar.selectbox("Aluno", student_options, index=0)
-
-    available_dates = (
-        fetch_behavior_dataframe(
+        scoped_options = list_behavior_filter_options(
             user_context,
             filters={
                 "teacher_id": selected_teacher_id,
                 "subject_id": selected_subject_id,
                 "class_id": selected_class_id,
-                "student_name": selected_student,
             },
-        )["date"]
-        .dropna()
-        .sort_values()
-        .unique()
-        .tolist()
-    )
-    default_date = pd.to_datetime(available_dates[-1]).date() if available_dates else datetime.date.today()
-    selected_date = st.sidebar.date_input("Data", value=default_date)
+        )
+
+        student_options = scoped_options["students"]["student"].tolist()
+        if not student_options:
+            st.warning("Não há alunos com episódios para os filtros selecionados.")
+            return
+        with filter_col4 if user_context["role"] == "admin" else filter_col3:
+            selected_student = st.selectbox("Aluno", student_options, index=0)
+
+        available_dates = (
+            fetch_behavior_dataframe(
+                user_context,
+                filters={
+                    "teacher_id": selected_teacher_id,
+                    "subject_id": selected_subject_id,
+                    "class_id": selected_class_id,
+                    "student_name": selected_student,
+                },
+            )["date"]
+            .dropna()
+            .sort_values()
+            .unique()
+            .tolist()
+        )
+        default_date = pd.to_datetime(available_dates[-1]).date() if available_dates else datetime.date.today()
+        date_cols = st.columns([1, 3])
+        with date_cols[0]:
+            selected_date = st.date_input("Data", value=default_date)
 
     df = fetch_behavior_dataframe(
         user_context,
@@ -1082,53 +1094,3 @@ def show_behavior_charts(user_context: dict):
     with col2:
         st.plotly_chart(fig_bar, width="stretch", config=plotly_config)
     st.plotly_chart(fig_timeline, width="stretch", config=plotly_config)
-
-    export_df = df_behavior_charts(
-        user_context,
-        filters={
-            "teacher_id": selected_teacher_id,
-            "subject_id": selected_subject_id,
-            "class_id": selected_class_id,
-            "student_name": selected_student,
-            "start_date": selected_date,
-            "end_date": selected_date,
-        },
-    )
-    st.download_button(
-        "Baixar base filtrada (CSV)",
-        data=export_df.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"graficos_{selected_student}_{selected_date}.csv",
-        mime="text/csv",
-    )
-
-    pdf_buf = io.BytesIO()
-    c = canvas.Canvas(pdf_buf, pagesize=A4)
-
-    def add_plot_page(fig, titulo):
-        temp_buf = io.BytesIO()
-        try:
-            fig.write_image(temp_buf, format="png")
-        except Exception:
-            return
-        temp_buf.seek(0)
-        image = Image.open(temp_buf)
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-            image.convert("RGB").save(temp_file.name)
-            temp_path = temp_file.name
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(40, 800, titulo)
-        c.drawImage(temp_path, 40, 120, width=500, preserveAspectRatio=True, mask="auto")
-        c.showPage()
-        os.unlink(temp_path)
-
-    add_plot_page(fig_pie, "Distribuição do tempo por comportamento")
-    add_plot_page(fig_bar, "Tempo total por comportamento")
-    add_plot_page(fig_timeline, "Linha do tempo da aula")
-    c.save()
-    pdf_buf.seek(0)
-    st.download_button(
-        "Baixar gráficos em PDF",
-        data=pdf_buf,
-        file_name=f"graficos_{selected_student}_{selected_date}.pdf",
-        mime="application/pdf",
-    )

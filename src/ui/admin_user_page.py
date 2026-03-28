@@ -2,6 +2,7 @@ import bcrypt
 import streamlit as st
 
 from control_database_postgres import list_all_users, registrar_usuario, reset_user_password
+from register_face_multi_images_avg import get_embedding_maintenance_snapshot, reprocess_pending_embeddings, register_faces
 
 
 ESTADOS = [
@@ -141,6 +142,83 @@ def _render_reset_password_form(users_df):
         st.error("Nao foi possivel atualizar a senha.")
 
 
+def _render_embedding_maintenance():
+    st.subheader("Manutencao de embeddings")
+    snapshot = get_embedding_maintenance_snapshot()
+    last_result = st.session_state.get("admin_embedding_maintenance_result")
+
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    metric_col1.metric("Alunos mapeados", snapshot["total_students"])
+    metric_col2.metric("Embeddings atualizados", snapshot["with_embeddings"])
+    metric_col3.metric("Embeddings pendentes", snapshot["pending_embeddings"])
+
+    action_col1, action_col2 = st.columns(2)
+    with action_col1:
+        if st.button("Reprocessar embeddings pendentes", type="primary", use_container_width=True):
+            with st.spinner("Reprocessando embeddings pendentes..."):
+                result = reprocess_pending_embeddings()
+            st.session_state["admin_embedding_maintenance_result"] = {
+                "action": "pendentes",
+                **result,
+            }
+            if result["processed"] == 0:
+                st.info("Nao ha embeddings pendentes para processamento.")
+            elif result["failed"] == 0:
+                st.success(f"Processamento concluido. {result['success']} aluno(s) atualizado(s).")
+            else:
+                st.warning(
+                    f"Processamento concluido com pendencias. "
+                    f"{result['success']} atualizado(s) e {result['failed']} com falha."
+                )
+    with action_col2:
+        if st.button("Reprocessar todos os embeddings", use_container_width=True):
+            with st.spinner("Reprocessando todos os embeddings..."):
+                result = register_faces()
+            st.session_state["admin_embedding_maintenance_result"] = {
+                "action": "todos",
+                **result,
+            }
+            if result["processed"] == 0:
+                st.info("Nao ha alunos disponiveis para processamento.")
+            elif result["failed"] == 0:
+                st.success(f"Processamento completo. {result['success']} aluno(s) atualizado(s).")
+            else:
+                st.warning(
+                    f"Processamento completo com pendencias. "
+                    f"{result['success']} atualizado(s) e {result['failed']} com falha."
+                )
+
+    last_result = st.session_state.get("admin_embedding_maintenance_result")
+    if last_result and last_result.get("failed_students"):
+        st.markdown("##### Falhas do ultimo processamento")
+        st.dataframe(
+            last_result["failed_students"],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    students_df = snapshot["students"]
+    if students_df.empty:
+        st.info("Nenhum aluno encontrado no mapeamento de cadastro.")
+        return
+
+    with st.expander("Ver status dos embeddings por aluno", expanded=False):
+        st.dataframe(
+            students_df.rename(
+                columns={
+                    "nome": "Aluno",
+                    "matricula": "Matricula",
+                    "hash": "Hash",
+                    "embedding_status": "Status do embedding",
+                    "image_count": "Qtd. imagens",
+                    "embedding_diagnostic": "Diagnostico",
+                }
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
+
+
 def render_admin_user_page(user_context: dict):
     if (user_context or {}).get("role") != "admin":
         st.error("Acesso restrito a administradores.")
@@ -176,3 +254,6 @@ def render_admin_user_page(user_context: dict):
         _render_create_user_form()
     with col2:
         _render_reset_password_form(users_df)
+
+    st.divider()
+    _render_embedding_maintenance()
