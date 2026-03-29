@@ -38,6 +38,7 @@ HIGHLIGHT_CARD_STYLES = {
     "segunda_recorrencia": {"accent": "#FFB74D", "icon": "◇", "badge": "Complementar"},
     "padrao_geral": {"accent": "#64B5F6", "icon": "≋", "badge": "Consistência"},
     "variacao_principal": {"accent": "#EF5350", "icon": "⇄", "badge": "Comparação"},
+    "atencao_pedagogica": {"accent": "#F6C453", "icon": "▲", "badge": "Observação"},
     "neutro": {"accent": "#90A4AE", "icon": "•", "badge": "Resumo"},
 }
 
@@ -412,6 +413,14 @@ def _render_highlight_card(kind: str, title: str, value: str, supporting_text: s
     icon = style["icon"]
     badge_label = style["badge"]
     status_badge_color, status_badge_text = _build_status_badge(value)
+    if kind == "atencao_pedagogica":
+        background = f"linear-gradient(180deg, {accent}18 0%, rgba(255,255,255,0.02) 100%)"
+        shadow = f"0 10px 24px {accent}12, inset 0 1px 0 rgba(255,255,255,0.03)"
+        min_height = "138px"
+    else:
+        background = "linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.015) 100%)"
+        shadow = "inset 0 1px 0 rgba(255,255,255,0.03)"
+        min_height = "132px"
     badge_markup = (
         "<div style='display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.55rem;'>"
         f"<span style='display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.16rem 0.55rem; "
@@ -428,13 +437,13 @@ def _render_highlight_card(kind: str, title: str, value: str, supporting_text: s
 
     st.markdown(
         (
-            "<div style='padding: 1rem 1rem 0.9rem 1rem; border: 1px solid rgba(255,255,255,0.08); "
-            f"border-left: 4px solid {accent}; border-radius: 0.95rem; background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.015) 100%); "
-            "box-shadow: inset 0 1px 0 rgba(255,255,255,0.03); min-height: 158px;'>"
-            f"<div style='font-size: 0.82rem; color: {accent}; margin-bottom: 0.42rem; font-weight: 600; letter-spacing: 0.01em;'>{html.escape(title)}</div>"
-            f"<div style='font-size: 1.15rem; font-weight: 600; color: #F5F7FA; margin-bottom: 0.55rem;'>{html.escape(value)}</div>"
+            "<div style='padding: 0.78rem 0.88rem 0.74rem 0.88rem; border: 1px solid rgba(255,255,255,0.08); "
+            f"border-left: 4px solid {accent}; border-radius: 0.95rem; background: {background}; "
+            f"box-shadow: {shadow}; min-height: {min_height}; margin-bottom: 0.5rem;'>"
+            f"<div style='font-size: 0.77rem; color: {accent}; margin-bottom: 0.3rem; font-weight: 600; letter-spacing: 0.01em;'>{html.escape(title)}</div>"
+            f"<div style='font-size: 1.06rem; font-weight: 800; color: #F5F7FA; margin-bottom: 0.42rem;'>{html.escape(value)}</div>"
             f"{badge_markup}"
-            f"<div style='font-size: 0.92rem; line-height: 1.55; color: #D8DEE7; text-align: justify;'>{html.escape(supporting_text)}</div>"
+            f"<div style='font-size: 0.87rem; line-height: 1.38; color: #D8DEE7; text-align: left;'>{html.escape(supporting_text)}</div>"
             "</div>"
         ),
         unsafe_allow_html=True,
@@ -446,7 +455,7 @@ def _inject_report_top_styles() -> None:
         """
         <style>
         .report-top-hero {
-            padding: 1.15rem 0 0.35rem 0;
+            padding: 0.55rem 0 0.15rem 0;
         }
         .report-top-title {
             display: flex;
@@ -477,7 +486,7 @@ def _inject_report_top_styles() -> None:
             font-size: 1rem;
             line-height: 1.65;
             color: #A7ADBB;
-            margin: 0.25rem 0 0.1rem 0;
+            margin: 0.18rem 0 0.05rem 0;
         }
         .report-top-panel {
             border-radius: 22px;
@@ -488,14 +497,14 @@ def _inject_report_top_styles() -> None:
             margin: 1rem 0 1rem 0;
         }
         .report-action-shell {
-            border-radius: 22px;
+            border-radius: 20px;
             border: 1px solid rgba(123, 144, 255, 0.18);
             background:
                 radial-gradient(circle at top right, rgba(86, 112, 255, 0.18), transparent 34%),
                 linear-gradient(180deg, rgba(29, 33, 48, 0.94) 0%, rgba(21, 24, 34, 0.98) 100%);
-            padding: 1rem 1.1rem 1.05rem 1.1rem;
+            padding: 0.9rem 0.95rem 0.95rem 0.95rem;
             box-shadow: 0 16px 36px rgba(0,0,0,0.18);
-            margin: 0.35rem 0 1rem 0;
+            margin: 0 0 0.2rem 0;
         }
         .report-action-eyebrow {
             font-size: 0.8rem;
@@ -506,25 +515,25 @@ def _inject_report_top_styles() -> None:
             margin-bottom: 0.45rem;
         }
         .report-action-title {
-            font-size: 1.16rem;
+            font-size: 1.02rem;
             font-weight: 800;
             color: #F5F7FC;
-            margin-bottom: 0.25rem;
+            margin-bottom: 0.2rem;
         }
         .report-action-subtitle {
-            font-size: 0.95rem;
-            line-height: 1.6;
+            font-size: 0.9rem;
+            line-height: 1.5;
             color: #B6BED0;
             margin: 0;
         }
         .report-action-note {
-            margin-top: 0.65rem;
-            font-size: 0.88rem;
+            margin-top: 0.5rem;
+            font-size: 0.84rem;
             color: #8F99AE;
         }
         .report-filter-note {
-            margin-top: -0.2rem;
-            margin-bottom: 0.85rem;
+            margin-top: -0.15rem;
+            margin-bottom: 0.65rem;
             color: #98A2B8;
             font-size: 0.93rem;
             line-height: 1.55;
@@ -643,8 +652,8 @@ def _inject_report_top_styles() -> None:
         .overview-panel {
             border-radius: 16px;
             border: 1px solid rgba(255,255,255,0.08);
-            padding: 0.95rem 1rem;
-            margin-bottom: 0.8rem;
+            padding: 0.78rem 0.9rem;
+            margin-bottom: 0.45rem;
         }
         .overview-panel.executive {
             background: linear-gradient(180deg, rgba(56, 78, 112, 0.22) 0%, rgba(39, 49, 74, 0.16) 100%);
@@ -653,50 +662,102 @@ def _inject_report_top_styles() -> None:
             background: linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.02) 100%);
         }
         .overview-panel-title {
-            font-size: 0.92rem;
+            font-size: 0.84rem;
             font-weight: 700;
             color: #F2F5FA;
-            margin-bottom: 0.45rem;
+            margin-bottom: 0.32rem;
+            letter-spacing: 0.01em;
         }
         .overview-panel-body {
             color: #CDD4DF;
-            line-height: 1.68;
-            font-size: 0.97rem;
+            line-height: 1.42;
+            font-size: 0.93rem;
+            max-width: 62ch;
         }
         .overview-panel-body.muted {
             color: #B3BBC8;
-            font-size: 0.95rem;
+            font-size: 0.91rem;
+        }
+        .overview-summary-line {
+            margin: 0.05rem 0 0.8rem 0;
+            color: #E2E8F2;
+            font-size: 1rem;
+            line-height: 1.35;
+            font-weight: 700;
+            max-width: 76ch;
+        }
+        .overview-cards-shell {
+            margin-bottom: 0.8rem;
+        }
+        .overview-interpretation-compact {
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.07);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.015) 100%);
+            padding: 0.8rem 0.92rem;
+            margin-bottom: 0.7rem;
+        }
+        .overview-interpretation-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #AAB4C6;
+            margin-bottom: 0.32rem;
+        }
+        .overview-interpretation-body {
+            color: #D5DCE7;
+            font-size: 0.92rem;
+            line-height: 1.4;
+            max-width: 74ch;
         }
         .attention-list {
             display: grid;
-            gap: 0.65rem;
-            margin-top: 0.55rem;
+            gap: 0.5rem;
+            margin-top: 0.2rem;
         }
         .attention-item {
             display: flex;
-            gap: 0.7rem;
+            gap: 0.55rem;
             align-items: flex-start;
-            padding: 0.72rem 0.82rem;
-            border-radius: 14px;
+            padding: 0.62rem 0.72rem;
+            border-radius: 12px;
             background: rgba(255,255,255,0.028);
             border: 1px solid rgba(255,255,255,0.06);
         }
         .attention-marker {
             flex: 0 0 auto;
-            width: 0.52rem;
-            height: 0.52rem;
-            border-radius: 999px;
-            background: #FFB74D;
-            margin-top: 0.42rem;
-            box-shadow: 0 0 0 4px rgba(255,183,77,0.12);
+            color: #FFB74D;
+            font-size: 0.92rem;
+            line-height: 1;
+            margin-top: 0.08rem;
         }
         .attention-text {
             color: #D4DAE4;
-            line-height: 1.6;
-            font-size: 0.95rem;
+            line-height: 1.4;
+            font-size: 0.9rem;
         }
         </style>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_overview_summary_line(text: str) -> None:
+    if not text:
+        return
+    st.markdown(f"<div class='overview-summary-line'>{html.escape(text)}</div>", unsafe_allow_html=True)
+
+
+def _render_compact_interpretation(text: str) -> None:
+    if not text:
+        return
+    st.markdown(
+        (
+            "<div class='overview-interpretation-compact'>"
+            "<div class='overview-interpretation-title'>Leitura Pedagógica</div>"
+            f"<div class='overview-interpretation-body'>{html.escape(text)}</div>"
+            "</div>"
+        ),
         unsafe_allow_html=True,
     )
 
@@ -728,45 +789,26 @@ def _render_report_export_actions(
 ) -> None:
     export_base_name = _build_export_base_name(selected_student, start_date, end_date)
     pdf_bytes = build_report_pdf(report_data)
-    summary_csv = _to_csv_bytes(display_summary)
-    timeline_csv = _to_csv_bytes(timeline_display)
 
     st.markdown(
         """
         <div class="report-action-shell">
-            <div class="report-action-eyebrow">Saída do Relatório</div>
-            <div class="report-action-title">Gerar a versão formal do relatório</div>
+            <div class="report-action-eyebrow">Exportação</div>
+            <div class="report-action-title">Baixar relatório e bases</div>
             <p class="report-action-subtitle">
-                Esta tela apresenta uma visão analítica resumida. Para compartilhar, arquivar ou encaminhar o resultado,
-                exporte o relatório completo em PDF ou os dados em formato tabular.
+                Exporte o PDF formal do recorte selecionado.
             </p>
-            <div class="report-action-note">As exportações detalhadas continuam disponíveis na aba “Detalhes e Exportação”.</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    action_col1, action_col2, action_col3 = st.columns([1.15, 1, 1], gap="medium")
-    action_col1.download_button(
+    st.download_button(
         "📄 Gerar PDF",
         data=pdf_bytes,
         file_name=f"relatorio_observacional_{export_base_name}.pdf",
         mime="application/pdf",
         use_container_width=True,
         type="primary",
-    )
-    action_col2.download_button(
-        "📊 Exportar resumo",
-        data=summary_csv,
-        file_name=f"relatorio_resumo_{export_base_name}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-    action_col3.download_button(
-        "🗂 Exportar episódios",
-        data=timeline_csv,
-        file_name=f"relatorio_episodios_{export_base_name}.csv",
-        mime="text/csv",
-        use_container_width=True,
     )
 
 
@@ -843,7 +885,7 @@ def _render_overview_text_panel(title: str, text: str, variant: str = "executive
         st.info("Não houve base suficiente para compor este bloco.")
         return
 
-    body_class = "overview-panel-body" if variant == "executive" else "overview-panel-body muted"
+    body_class = "overview-panel-body" if variant in {"executive", "attention"} else "overview-panel-body muted"
     st.markdown(
         (
             f"<div class='overview-panel {variant}'>"
@@ -865,7 +907,7 @@ def _render_attention_points(points: list[str]) -> None:
         concise_point = _shorten_text(point, max_sentences=1)
         items.append(
             "<div class='attention-item'>"
-            "<div class='attention-marker'></div>"
+            "<div class='attention-marker'>!</div>"
             f"<div class='attention-text'>{html.escape(concise_point)}</div>"
             "</div>"
         )
@@ -873,48 +915,348 @@ def _render_attention_points(points: list[str]) -> None:
     st.markdown(f"<div class='attention-list'>{''.join(items)}</div>", unsafe_allow_html=True)
 
 
-def _build_quick_insights(report_data: dict) -> dict[str, str]:
+def _get_period_reference_label(report_data: dict) -> str:
+    if report_data["period_mode"] == "Diário":
+        return "a aula analisada"
+    return "o período analisado"
+
+
+def _get_predominant_consistency_row(report_data: dict):
     summary_df = report_data["behavior_summary"]
     consistency_df = report_data["behavior_consistency"]
-    comparison_df = report_data["comparison"]
-    attention_points = generate_observational_attention_points(report_data)
+    if summary_df.empty or consistency_df.empty:
+        return None
+    predominant_behavior = str(summary_df.iloc[0]["behavior"])
+    match = consistency_df[consistency_df["behavior"] == predominant_behavior]
+    if match.empty:
+        return None
+    return match.iloc[0]
 
-    predominant_behavior = "Sem dados"
-    second_behavior = "Sem destaque secundário"
-    consistency_label = "Sem base suficiente"
-    primary_attention = attention_points[0] if attention_points else "Sem pontos adicionais de atenção."
-    primary_variation = "Sem base comparativa suficiente."
 
-    if not summary_df.empty:
-        predominant_behavior = str(summary_df.iloc[0]["behavior"])
-        if len(summary_df) > 1:
-            second_row = summary_df.iloc[1]
-            second_behavior = (
-                f"{second_row['behavior']} ({float(second_row['occurrence_percentage']):.2f}% dos registros)"
+def _map_regularidade_label(consistency_label: str | None) -> str:
+    normalized = str(consistency_label or "").lower()
+    if "regular" in normalized:
+        return "Estável"
+    if "episódica" in normalized or "episodica" in normalized:
+        return "Oscilante"
+    return "Variável"
+
+
+def _detect_pedagogical_attention_signals(report_data: dict) -> dict[str, object]:
+    summary_df = report_data["behavior_summary"]
+    if summary_df.empty:
+        return {"has_signal": False, "signals": [], "headline": "", "summary": ""}
+
+    config = {
+        "Distraído": {
+            "display_name": "distração",
+            "occurrence_threshold": 12.0,
+            "duration_threshold": 10.0,
+            "records_threshold": 3,
+        },
+        "Agitado": {
+            "display_name": "agitação",
+            "occurrence_threshold": 8.0,
+            "duration_threshold": 8.0,
+            "records_threshold": 2,
+        },
+        "Perguntando": {
+            "display_name": "interação frequente",
+            "occurrence_threshold": 18.0,
+            "duration_threshold": 12.0,
+            "records_threshold": 3,
+        },
+        "Dormindo": {
+            "display_name": "sonolência observada",
+            "occurrence_threshold": 6.0,
+            "duration_threshold": 6.0,
+            "records_threshold": 1,
+        },
+    }
+
+    signals: list[dict[str, object]] = []
+    for behavior_name, rules in config.items():
+        row = summary_df[summary_df["behavior"] == behavior_name]
+        if row.empty:
+            continue
+        row = row.iloc[0]
+        occurrence = float(row["occurrence_percentage"])
+        duration = float(row["duration_percentage"])
+        records = int(row["records"])
+        if (
+            occurrence >= rules["occurrence_threshold"]
+            or duration >= rules["duration_threshold"]
+            or records >= rules["records_threshold"]
+        ):
+            signals.append(
+                {
+                    "behavior": behavior_name,
+                    "display_name": rules["display_name"],
+                    "occurrence_percentage": occurrence,
+                    "duration_percentage": duration,
+                    "records": records,
+                }
             )
 
-    if not consistency_df.empty and not summary_df.empty:
-        consistency_match = consistency_df[consistency_df["behavior"] == predominant_behavior]
-        if not consistency_match.empty:
-            consistency_label = str(consistency_match.iloc[0]["consistency_label"])
+    signals.sort(
+        key=lambda item: (
+            item["occurrence_percentage"],
+            item["duration_percentage"],
+            item["records"],
+        ),
+        reverse=True,
+    )
 
-    comparison_lines = generate_previous_period_comparison(report_data)
-    if comparison_lines:
-        primary_variation = comparison_lines[0]
+    if not signals:
+        return {"has_signal": False, "signals": [], "headline": "", "summary": ""}
+
+    main_signal = signals[0]
+    if len(signals) == 1:
+        headline = f"Sinal secundário de atenção pedagógica: {main_signal['behavior']}"
+    else:
+        other_behaviors = ", ".join(signal["behavior"] for signal in signals[1:3])
+        headline = (
+            f"Sinais secundários de atenção pedagógica: {main_signal['behavior']}"
+            f" e {other_behaviors}"
+        )
+
+    if main_signal["behavior"] == "Perguntando":
+        summary = (
+            "Foram observadas ocorrências complementares de interação frequente. Esse dado não é, por si só, "
+            "negativo, mas recomenda leitura articulada ao tipo de atividade e à dinâmica didática."
+        )
+    else:
+        summary = (
+            f"Apesar da predominância geral do período, foram observados episódios de {main_signal['display_name']} "
+            "com presença suficiente para merecer observação contextualizada em aulas futuras."
+        )
 
     return {
-        "predominancia": predominant_behavior,
-        "segunda_recorrencia": second_behavior,
-        "padrao_geral": consistency_label,
-        "ponto_atencao": primary_attention,
-        "variacao_principal": primary_variation,
+        "has_signal": True,
+        "signals": signals,
+        "headline": headline,
+        "summary": summary,
     }
+
+
+def _build_teacher_summary_text(report_data: dict) -> str:
+    summary_df = report_data["behavior_summary"]
+    metrics = report_data["headline_metrics"]
+    if summary_df.empty:
+        return "Não houve base suficiente para compor um resumo pedagógico do período."
+
+    context_label = _get_period_reference_label(report_data)
+    predominant_row = summary_df.iloc[0]
+    consistency_row = _get_predominant_consistency_row(report_data)
+    pedagogical_signal = _detect_pedagogical_attention_signals(report_data)
+
+    predominant_behavior = str(predominant_row["behavior"]).lower()
+    predominant_share = float(predominant_row["occurrence_percentage"])
+
+    opening = f"Durante {context_label}, o comportamento observado foi predominantemente {predominant_behavior}."
+
+    if pedagogical_signal["has_signal"]:
+        return (
+            f"{opening} Houve sinais secundários relevantes no período, o que recomenda leitura contextualizada "
+            f"dos {metrics['total_records']} episódios analisados."
+        )
+
+    if consistency_row is not None and _map_regularidade_label(consistency_row["consistency_label"]) == "Estável":
+        return (
+            f"{opening} O padrão manteve estabilidade no recorte analisado, com {predominant_share:.1f}% dos registros associados a esse comportamento."
+        )
+
+    return (
+        f"{opening} O padrão apresentou variações ao longo do recorte analisado, mantendo {predominant_share:.1f}% dos registros no comportamento predominante."
+    )
+
+
+def _build_overview_summary_line(report_data: dict) -> str:
+    summary_df = report_data["behavior_summary"]
+    if summary_df.empty:
+        return "Sem base suficiente para síntese pedagógica."
+
+    predominant_behavior = str(summary_df.iloc[0]["behavior"]).lower()
+    pedagogical_signal = _detect_pedagogical_attention_signals(report_data)
+    consistency_row = _get_predominant_consistency_row(report_data)
+    regularidade = _map_regularidade_label(
+        consistency_row["consistency_label"] if consistency_row is not None else None
+    )
+
+    if pedagogical_signal["has_signal"]:
+        main_signal = str(pedagogical_signal["signals"][0]["display_name"])
+        return f"Predominância de {predominant_behavior} com episódios de {main_signal} que requerem acompanhamento."
+
+    if regularidade == "Estável":
+        return f"Predominância de {predominant_behavior} com padrão estável no período analisado."
+
+    return f"Predominância de {predominant_behavior} com variações observadas ao longo do período."
+
+
+def _build_pedagogical_interpretation_text(report_data: dict) -> str:
+    summary_df = report_data["behavior_summary"]
+    if summary_df.empty:
+        return "Não houve base suficiente para compor uma interpretação pedagógica do período."
+
+    predominant_behavior = str(summary_df.iloc[0]["behavior"])
+    consistency_row = _get_predominant_consistency_row(report_data)
+    pedagogical_signal = _detect_pedagogical_attention_signals(report_data)
+    regularidade = _map_regularidade_label(
+        consistency_row["consistency_label"] if consistency_row is not None else None
+    )
+    behavior_lower = predominant_behavior.lower()
+
+    if behavior_lower == "atento" and pedagogical_signal["has_signal"]:
+        main_signal = pedagogical_signal["signals"][0]
+        signal_name = str(main_signal["display_name"])
+        return (
+            f"As oscilações registradas, especialmente nos episódios compatíveis com {signal_name}, devem ser "
+            "interpretadas à luz da dinâmica da aula e observadas em registros futuros."
+        )
+
+    if behavior_lower == "atento" and regularidade == "Estável":
+        return (
+            "O padrão observado é compatível com acompanhamento contínuo da atividade proposta, sem indícios "
+            "observacionais de necessidade imediata de acompanhamento adicional."
+        )
+
+    if behavior_lower == "atento":
+        return (
+            "As variações registradas sugerem uma dinâmica menos estável e devem ser interpretadas em conjunto "
+            "com o contexto da aula."
+        )
+
+    if behavior_lower in {"distraído", "distraido", "dormindo", "agitado"} and regularidade == "Estável":
+        return (
+            "O padrão observado foi recorrente ao longo do período e sugere acompanhamento em aulas futuras para "
+            "verificar persistência e contexto de ocorrência."
+        )
+
+    if behavior_lower in {"distraído", "distraido", "dormindo", "agitado"}:
+        return (
+            "O padrão observado sugere necessidade de acompanhamento em aulas futuras, sempre com leitura "
+            "articulada ao contexto pedagógico e sem interpretação diagnóstica."
+        )
+
+    return (
+        "O padrão observado deve ser lido em conjunto com a atividade proposta e com o contexto pedagógico, "
+        "priorizando a observação de consistência em registros futuros."
+    )
+
+
+def _build_teacher_highlights(report_data: dict) -> list[dict[str, str]]:
+    summary_df = report_data["behavior_summary"]
+    if summary_df.empty:
+        return []
+
+    comparison_lines = generate_previous_period_comparison(report_data)
+    comparison_df = report_data["comparison"]
+    pedagogical_signal = _detect_pedagogical_attention_signals(report_data)
+    predominant_behavior = str(summary_df.iloc[0]["behavior"])
+    consistency_row = _get_predominant_consistency_row(report_data)
+    regularidade = _map_regularidade_label(
+        consistency_row["consistency_label"] if consistency_row is not None else None
+    )
+
+    highlights = [
+        {
+            "kind": "predominancia",
+            "title": "Predominância",
+            "value": predominant_behavior,
+            "supporting_text": "Comportamento com maior presença relativa no período analisado.",
+        },
+        {
+            "kind": "padrao_geral",
+            "title": "Regularidade do comportamento",
+            "value": regularidade,
+            "supporting_text": "Indica se o padrão principal apareceu de forma mais estável ou com oscilações ao longo do período.",
+        },
+    ]
+
+    if pedagogical_signal["has_signal"]:
+        main_signal = pedagogical_signal["signals"][0]
+        highlights.append(
+                {
+                    "kind": "atencao_pedagogica",
+                    "title": "Atenção pedagógica",
+                    "value": main_signal["behavior"],
+                    "supporting_text": "Comportamento secundário com presença suficiente para merecer observação pedagógica.",
+                }
+            )
+
+    has_comparison_basis = (
+        not comparison_df.empty and int(comparison_df["previous_records"].sum()) > 0 and comparison_lines
+    )
+    if has_comparison_basis:
+        first_line = comparison_lines[0]
+        if "Não há base" not in first_line and "Não houve registros suficientes" not in first_line:
+            highlights.append(
+                {
+                    "kind": "variacao_principal",
+                    "title": "Comparação recente",
+                    "value": "Período anterior",
+                    "supporting_text": _shorten_text(first_line, max_sentences=1),
+                }
+            )
+
+    return highlights
+
+
+def _order_teacher_highlights(highlights: list[dict[str, str]]) -> list[dict[str, str]]:
+    priority = {
+        "atencao_pedagogica": 0,
+        "padrao_geral": 1,
+        "predominancia": 2,
+        "variacao_principal": 3,
+    }
+    return sorted(highlights, key=lambda item: priority.get(item["kind"], 99))
+
+
+def _build_teacher_attention_points(report_data: dict) -> list[str]:
+    summary_df = report_data["behavior_summary"]
+    if summary_df.empty:
+        return ["Não houve base suficiente para destacar pontos de atenção no período."]
+
+    points: list[str] = []
+    consistency_row = _get_predominant_consistency_row(report_data)
+    pedagogical_signal = _detect_pedagogical_attention_signals(report_data)
+    regularidade = _map_regularidade_label(
+        consistency_row["consistency_label"] if consistency_row is not None else None
+    )
+    predominant_behavior = str(summary_df.iloc[0]["behavior"]).lower()
+
+    if pedagogical_signal["has_signal"]:
+        main_signal = pedagogical_signal["signals"][0]
+        points.append(
+            f"Monitorar a recorrência dos episódios de {str(main_signal['display_name'])} em aulas futuras."
+        )
+        points.append(
+            "Verificar o contexto da aula nos momentos em que ocorreu a oscilação comportamental."
+        )
+        return points[:3]
+
+    if predominant_behavior == "atento" and regularidade == "Estável":
+        return ["Não foram observados padrões que indiquem necessidade de acompanhamento adicional no período analisado."]
+
+    if regularidade in {"Variável", "Oscilante"} and len(points) < 2:
+        points.append(
+            "Reavaliar o padrão em novos registros para verificar se a oscilação se mantém."
+        )
+
+    if predominant_behavior in {"distraído", "distraido", "dormindo", "agitado"} and len(points) < 2:
+        points.append(
+            "Observar se o comportamento predominante se repete em outros contextos pedagógicos."
+        )
+
+    if not points:
+        points.append("Manter acompanhamento rotineiro, sem necessidade de ampliação da leitura neste momento.")
+
+    return points[:3]
 
 
 def render_report_page(user_context: dict):
     _inject_report_top_styles()
     _render_report_top_header()
-    top_actions_placeholder = st.empty()
 
     base_options = get_available_filters(user_context)
     students_df = base_options["students"]
@@ -923,87 +1265,91 @@ def render_report_page(user_context: dict):
         return
 
     with st.container(border=True):
-        st.markdown("<div class='report-panel-title'>Filtros do relatório</div>", unsafe_allow_html=True)
-        st.markdown(
-            "<div class='report-filter-note'>Defina o contexto de análise abaixo. Em seguida, use as ações no topo para gerar a versão formal do relatório ou exportar os dados.</div>",
-            unsafe_allow_html=True,
-        )
+        top_col_left, top_col_right = st.columns([2.25, 1], gap="medium")
+        with top_col_left:
+            st.markdown("<div class='report-panel-title'>Filtros do relatório</div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='report-filter-note'>Defina o contexto de análise e, em seguida, utilize as ações de exportação ao lado.</div>",
+                unsafe_allow_html=True,
+            )
 
-        controls_col1, controls_col2, controls_col3, controls_col4 = st.columns([2, 2, 2, 2])
-        with controls_col1:
-            selected_teacher_id = None
-            if user_context["role"] == "admin" and not base_options["teachers"].empty:
-                teacher_map = {int(row["id"]): row["nome"] for _, row in base_options["teachers"].iterrows()}
-                teacher_choice = st.selectbox("Professor", ["Todos"] + list(teacher_map.values()), index=0)
-                if teacher_choice != "Todos":
-                    selected_teacher_id = next(key for key, value in teacher_map.items() if value == teacher_choice)
-            else:
-                st.text_input("Professor", value=user_context["name"], disabled=True)
-        with controls_col2:
-            options_after_teacher = get_available_filters(
-                user_context,
-                filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
-            )
-            subject_map = {int(row["id"]): row["nome"] for _, row in options_after_teacher["subjects"].iterrows()}
-            subject_choice = st.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
-            selected_subject_id = None
-            if subject_choice != "Todas":
-                selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
-        with controls_col3:
-            options_after_subject = get_available_filters(
-                user_context,
-                filters={
-                    "teacher_id": selected_teacher_id,
-                    "subject_id": selected_subject_id,
-                },
-            )
-            class_map = {
-                int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-                for _, row in options_after_subject["classes"].iterrows()
-            }
-            class_choice = st.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
-            selected_class_id = None
-            if class_choice != "Todas":
-                selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
-        with controls_col4:
-            filtered_students_df = get_available_students(
-                user_context,
-                filters={
-                    "teacher_id": selected_teacher_id,
-                    "subject_id": selected_subject_id,
-                    "class_id": selected_class_id,
-                },
-            )
-            student_options = filtered_students_df["student"].tolist()
-            if not student_options:
-                st.warning("Não há alunos com episódios para os filtros selecionados.")
-                return
-            selected_student = st.selectbox("Aluno", student_options, index=0)
-
-        controls_col5, controls_col6 = st.columns([1, 1])
-        with controls_col5:
-            period_mode = st.selectbox("Período", ["Diário", "Semanal", "Mensal"], index=0)
-        with controls_col6:
-            start_default, end_default = _default_range(period_mode)
-            student_last_date = _get_student_last_date(filtered_students_df, selected_student)
-            if period_mode == "Diário":
-                selected_date = st.date_input("Data de referência", value=student_last_date or end_default)
-                start_date = selected_date
-                end_date = selected_date
-            else:
-                selected_range = st.date_input(
-                    "Intervalo de datas",
-                    value=(
-                        start_default,
-                        student_last_date or end_default,
-                    ),
+            controls_col1, controls_col2, controls_col3, controls_col4 = st.columns([1.2, 1.2, 1.2, 1.3], gap="small")
+            with controls_col1:
+                selected_teacher_id = None
+                if user_context["role"] == "admin" and not base_options["teachers"].empty:
+                    teacher_map = {int(row["id"]): row["nome"] for _, row in base_options["teachers"].iterrows()}
+                    teacher_choice = st.selectbox("Professor", ["Todos"] + list(teacher_map.values()), index=0)
+                    if teacher_choice != "Todos":
+                        selected_teacher_id = next(key for key, value in teacher_map.items() if value == teacher_choice)
+                else:
+                    st.text_input("Professor", value=user_context["name"], disabled=True)
+            with controls_col2:
+                options_after_teacher = get_available_filters(
+                    user_context,
+                    filters={"teacher_id": selected_teacher_id} if selected_teacher_id else None,
                 )
-
-                if not isinstance(selected_range, (list, tuple)) or len(selected_range) != 2:
-                    st.info("Selecione uma data inicial e uma data final para gerar o relatório.")
+                subject_map = {int(row["id"]): row["nome"] for _, row in options_after_teacher["subjects"].iterrows()}
+                subject_choice = st.selectbox("Disciplina", ["Todas"] + list(subject_map.values()), index=0)
+                selected_subject_id = None
+                if subject_choice != "Todas":
+                    selected_subject_id = next(key for key, value in subject_map.items() if value == subject_choice)
+            with controls_col3:
+                options_after_subject = get_available_filters(
+                    user_context,
+                    filters={
+                        "teacher_id": selected_teacher_id,
+                        "subject_id": selected_subject_id,
+                    },
+                )
+                class_map = {
+                    int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+                    for _, row in options_after_subject["classes"].iterrows()
+                }
+                class_choice = st.selectbox("Turma", ["Todas"] + list(class_map.values()), index=0)
+                selected_class_id = None
+                if class_choice != "Todas":
+                    selected_class_id = next(key for key, value in class_map.items() if value == class_choice)
+            with controls_col4:
+                filtered_students_df = get_available_students(
+                    user_context,
+                    filters={
+                        "teacher_id": selected_teacher_id,
+                        "subject_id": selected_subject_id,
+                        "class_id": selected_class_id,
+                    },
+                )
+                student_options = filtered_students_df["student"].tolist()
+                if not student_options:
+                    st.warning("Não há alunos com episódios para os filtros selecionados.")
                     return
+                selected_student = st.selectbox("Aluno", student_options, index=0)
 
-                start_date, end_date = selected_range
+            controls_col5, controls_col6 = st.columns([0.9, 1.4], gap="small")
+            with controls_col5:
+                period_mode = st.selectbox("Período", ["Diário", "Semanal", "Mensal"], index=0)
+            with controls_col6:
+                start_default, end_default = _default_range(period_mode)
+                student_last_date = _get_student_last_date(filtered_students_df, selected_student)
+                if period_mode == "Diário":
+                    selected_date = st.date_input("Data de referência", value=student_last_date or end_default)
+                    start_date = selected_date
+                    end_date = selected_date
+                else:
+                    selected_range = st.date_input(
+                        "Intervalo de datas",
+                        value=(
+                            start_default,
+                            student_last_date or end_default,
+                        ),
+                    )
+
+                    if not isinstance(selected_range, (list, tuple)) or len(selected_range) != 2:
+                        st.info("Selecione uma data inicial e uma data final para gerar o relatório.")
+                        return
+
+                    start_date, end_date = selected_range
+        with top_col_right:
+            top_actions_placeholder = st.empty()
 
     if start_date > end_date:
         st.error("A data inicial não pode ser maior que a data final.")
@@ -1050,11 +1396,12 @@ def render_report_page(user_context: dict):
     consistency_display = _build_consistency_display(consistency_df)
     comparison_display = _build_comparison_display(comparison_df)
     peak_days_display = _build_peak_days_display(report_data["peak_days"])
-    quick_insights = _build_quick_insights(report_data)
-    short_summary = _shorten_text(build_observational_summary(report_data), max_sentences=2)
-    short_interpretation = _shorten_text(generate_interpretive_summary(report_data), max_sentences=2)
+    pedagogical_signal = _detect_pedagogical_attention_signals(report_data)
+    overview_summary_line = _build_overview_summary_line(report_data)
+    pedagogical_interpretation = _build_pedagogical_interpretation_text(report_data)
+    teacher_highlights = _order_teacher_highlights(_build_teacher_highlights(report_data))
+    teacher_attention_points = _build_teacher_attention_points(report_data)
     short_temporal_summary = _shorten_text(_build_timeline_temporal_summary(report_data), max_sentences=2)
-    concise_attention_points = attention_points[:3]
     concise_comparison_lines = previous_period_lines[:3]
 
     with top_actions_placeholder.container():
@@ -1111,7 +1458,6 @@ def render_report_page(user_context: dict):
                 "🕒",
                 is_last=True,
             )
-    st.divider()
 
     fig_occurrence = px.pie(
         summary_df,
@@ -1154,52 +1500,34 @@ def render_report_page(user_context: dict):
         )
         fig_period.update_layout(margin=dict(l=10, r=10, t=50, b=10), legend_title_text="Comportamento")
 
-    hourly_summary_display = _build_hourly_summary_display(timeline_df)
     tabs = st.tabs(
-        ["Visão Geral", "Frequência e Duração", "Distribuição Temporal", "Comparações", "Detalhes e Exportação"]
+        ["Visão Geral", "Frequência e Duração", "Distribuição Temporal", "Comparações"]
     )
 
     with tabs[0]:
-        st.subheader("Síntese Analítica")
-        overview_col1, overview_col2 = st.columns([1.35, 1], gap="large")
-        with overview_col1:
-            _render_overview_text_panel("Resumo Executivo", short_summary, variant="executive")
-            _render_overview_text_panel("Leitura Interpretativa", short_interpretation, variant="interpretive")
-        with overview_col2:
-            st.markdown("##### Destaques Rápidos")
-            card_col1, card_col2 = st.columns(2)
-            with card_col1:
-                _render_highlight_card(
-                    "predominancia",
-                    "Predominância",
-                    quick_insights["predominancia"],
-                    "Comportamento com maior recorrência no período selecionado.",
-                )
-            with card_col2:
-                _render_highlight_card(
-                    "segunda_recorrencia",
-                    "Segunda maior recorrência",
-                    quick_insights["segunda_recorrencia"],
-                    "Ajuda a identificar o comportamento complementar mais frequente.",
-                )
-            card_col3, card_col4 = st.columns(2)
-            with card_col3:
-                _render_highlight_card(
-                    "padrao_geral",
-                    "Padrão geral",
-                    quick_insights["padrao_geral"],
-                    "Classificação observacional associada à regularidade do comportamento predominante.",
-                )
-            with card_col4:
-                _render_highlight_card(
-                    "variacao_principal",
-                    "Variação principal",
-                    "Período anterior",
-                    quick_insights["variacao_principal"],
-                )
+        st.subheader("Síntese Pedagógica")
+        with st.container(border=True):
+            _render_overview_summary_line(overview_summary_line)
 
-        st.markdown("##### Pontos de Atenção")
-        _render_attention_points(concise_attention_points)
+            st.markdown("<div class='overview-cards-shell'>", unsafe_allow_html=True)
+            if teacher_highlights:
+                card_cols = st.columns(len(teacher_highlights), gap="medium")
+                for idx, highlight in enumerate(teacher_highlights):
+                    with card_cols[idx]:
+                        _render_highlight_card(
+                            highlight["kind"],
+                            highlight["title"],
+                            highlight["value"],
+                            highlight["supporting_text"],
+                        )
+            else:
+                st.info("Não houve destaques suficientes para compor este bloco.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            _render_compact_interpretation(pedagogical_interpretation)
+
+            st.markdown("##### Pontos de Atenção")
+            _render_attention_points(teacher_attention_points)
 
     with tabs[1]:
         st.subheader("Frequência e Duração")
@@ -1237,69 +1565,3 @@ def render_report_page(user_context: dict):
                 st.info("Não há base comparativa suficiente.")
             else:
                 st.dataframe(comparison_display, width="stretch", hide_index=True)
-
-    with tabs[4]:
-        st.subheader("Detalhes e Exportação")
-        st.caption("Área complementar com tabelas extensas, síntese completa e exportações adicionais.")
-        detail_col1, detail_col2 = st.columns([1, 1], gap="large")
-        with detail_col1:
-            with st.expander("Tabela consolidada de frequências", expanded=False):
-                st.dataframe(display_summary, width="stretch", hide_index=True)
-            with st.expander("Resumo complementar por faixa horária", expanded=False):
-                if hourly_summary_display.empty:
-                    st.info("Não houve base suficiente para montar o resumo complementar por faixas horárias.")
-                else:
-                    st.dataframe(hourly_summary_display, width="stretch", hide_index=True)
-            with st.expander("Comparação detalhada com o período anterior", expanded=False):
-                if comparison_display.empty:
-                    st.info("Não há base comparativa suficiente.")
-                else:
-                    st.dataframe(comparison_display, width="stretch", hide_index=True)
-            with st.expander("Resumo cronológico dos episódios", expanded=False):
-                st.dataframe(timeline_display, width="stretch", hide_index=True)
-            with st.expander("Consistência comportamental detalhada", expanded=False):
-                if consistency_display.empty:
-                    st.info("Não houve base suficiente para detalhar a consistência comportamental.")
-                else:
-                    st.dataframe(consistency_display, width="stretch", hide_index=True)
-            with st.expander("Dias com maior recorrência por comportamento", expanded=False):
-                if peak_days_display.empty:
-                    st.info("Não houve dados suficientes para destacar os dias de maior recorrência.")
-                else:
-                    st.dataframe(peak_days_display, width="stretch", hide_index=True)
-        with detail_col2:
-            export_base_name = _build_export_base_name(selected_student, start_date, end_date)
-            st.markdown("##### Exportação")
-            export_col1, export_col2, export_col3 = st.columns(3)
-            export_col1.download_button(
-                "Baixar CSV do resumo",
-                data=_to_csv_bytes(display_summary),
-                file_name=f"relatorio_resumo_{export_base_name}.csv",
-                mime="text/csv",
-                width="stretch",
-            )
-            export_col2.download_button(
-                "Baixar CSV dos episódios",
-                data=_to_csv_bytes(timeline_display),
-                file_name=f"relatorio_episodios_{export_base_name}.csv",
-                mime="text/csv",
-                width="stretch",
-            )
-            export_col3.download_button(
-                "Baixar PDF",
-                data=build_report_pdf(report_data),
-                file_name=f"relatorio_observacional_{export_base_name}.pdf",
-                mime="application/pdf",
-                width="stretch",
-            )
-
-            with st.expander("Síntese analítica completa", expanded=False):
-                st.markdown("##### Resumo Geral")
-                _render_justified_text(build_observational_summary(report_data))
-                st.markdown("##### Leitura Interpretativa")
-                _render_justified_text(generate_interpretive_summary(report_data))
-            with st.expander("Limitações e nota metodológica", expanded=False):
-                st.markdown("##### Limitações Metodológicas")
-                _render_justified_text(build_limitations_text())
-                st.markdown("##### Nota Metodológica sobre a Duração Estimada")
-                _render_justified_text(generate_methodological_note())

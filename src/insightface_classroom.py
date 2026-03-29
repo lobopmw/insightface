@@ -784,6 +784,35 @@ def _format_duration_label(delta: datetime.timedelta | None) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def _security_camera_icon_svg() -> str:
+    return """
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M14 23.5C14 21.6 15.6 20 17.5 20H38.8C40 20 41.2 19.7 42.2 19.1L49.8 14.6C51.7 13.5 54 14.8 54 17V31.4C54 33.6 51.7 34.9 49.8 33.8L42.2 29.3C41.2 28.7 40 28.4 38.8 28.4H17.5C15.6 28.4 14 26.9 14 25V23.5Z" fill="#EEF3FF" fill-opacity="0.96"/>
+        <path d="M21 31.5H28L25.6 37.8H18.4L21 31.5Z" fill="#C8D4EA"/>
+        <path d="M25.2 37.8H36.8C38.2 37.8 39.4 39 39.4 40.4C39.4 41.8 38.2 43 36.8 43H18.2C16.8 43 15.6 41.8 15.6 40.4C15.6 39 16.8 37.8 18.2 37.8H25.2Z" fill="#D8E1F2"/>
+        <circle cx="34.5" cy="24.2" r="5.8" fill="#6E58FF"/>
+        <circle cx="34.5" cy="24.2" r="3.5" fill="#1C2340"/>
+        <circle cx="34.5" cy="24.2" r="1.6" fill="#9CD6FF"/>
+        <path d="M46.8 21L51.6 18.2" stroke="#B9C6DD" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M44.8 25.2H50.8" stroke="#B9C6DD" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M46.8 29.4L51.6 32.2" stroke="#B9C6DD" stroke-width="2.6" stroke-linecap="round"/>
+    </svg>
+    """
+
+
+def _monitor_hero_icon_svg() -> str:
+    return """
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M33 10C24.2 10 17 17.2 17 26V30.2C17 33.4 15.8 36.5 13.7 38.9L11.8 41.1C10.3 42.8 11.5 45.5 13.8 45.5H52.2C54.5 45.5 55.7 42.8 54.2 41.1L52.3 38.9C50.2 36.5 49 33.4 49 30.2V26C49 17.2 41.8 10 33 10Z" fill="#E9EEF9" fill-opacity="0.96"/>
+        <path d="M24.5 45.5C25.5 50.2 29 53 33 53C37 53 40.5 50.2 41.5 45.5H24.5Z" fill="#DCE4F4"/>
+        <path d="M23 22.5C25.8 18.2 30.2 15.8 35.2 15.8C37.4 15.8 39.6 16.3 41.5 17.2" stroke="#B9C5DA" stroke-width="3" stroke-linecap="round"/>
+        <path d="M16.2 21.8C18 18.7 20.7 16.1 23.9 14.4" stroke="#8AAAF6" stroke-width="3.2" stroke-linecap="round"/>
+        <circle cx="45.5" cy="17.5" r="2.8" fill="#6E58FF"/>
+        <path d="M29 48.6C30.1 50.3 31.4 51.1 33 51.1C34.6 51.1 35.9 50.3 37 48.6" stroke="#B7C3D9" stroke-width="2.6" stroke-linecap="round"/>
+    </svg>
+    """
+
+
 def _render_context_card(session_state_label: str, selected_subject_label: str, selected_class_label: str, session_data=None):
     start_time = None if not session_data else pd.to_datetime(session_data.get("start_time")) if session_data.get("start_time") else None
     end_time = None if not session_data else pd.to_datetime(session_data.get("end_time")) if session_data.get("end_time") else None
@@ -883,7 +912,7 @@ def render_monitor_video_summary_fragment(current_session_id=None):
         f"""
         <div class="monitor-video-head" style="padding:0 0 1rem 0; border-bottom:none;">
             <div class="monitor-card-title-wrap">
-                <div class="monitor-card-icon monitor-card-icon-purple">📷</div>
+                <div class="monitor-card-icon monitor-card-icon-purple">{_monitor_hero_icon_svg()}</div>
                 <div class="monitor-card-title">Vídeo de Monitoramento</div>
             </div>
             <div class="monitor-video-badge {video_snapshot['badge_class']}">
@@ -2048,6 +2077,11 @@ def recognition_behavior():
                 color: #F5F7FB;
                 flex: 0 0 auto;
             }
+            .monitor-card-icon svg {
+                width: 22px;
+                height: 22px;
+                display: block;
+            }
             .monitor-card-icon-purple {
                 background: linear-gradient(180deg, #6E58FF 0%, #4A36C9 100%);
             }
@@ -2204,6 +2238,11 @@ def recognition_behavior():
                 background: linear-gradient(180deg, rgba(106,82,255,0.28) 0%, rgba(74,56,175,0.24) 100%);
                 color: #8E7BFF;
                 box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+            }
+            .monitor-placeholder-icon svg {
+                width: 42px;
+                height: 42px;
+                display: block;
             }
             .monitor-placeholder-title {
                 color: #F4F7FB;
@@ -2487,10 +2526,10 @@ def recognition_behavior():
                         )
                 else:
                     st.markdown(
-                        """
+                        f"""
                         <div class="monitor-placeholder">
                             <div>
-                                <div class="monitor-placeholder-icon">📷</div>
+                                <div class="monitor-placeholder-icon">{_monitor_hero_icon_svg()}</div>
                                 <div class="monitor-placeholder-title">Tela de Monitoramento</div>
                                 <div class="monitor-placeholder-subtitle">
                                     O vídeo da câmera será exibido aqui após o início da sessão.
