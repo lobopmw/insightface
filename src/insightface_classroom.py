@@ -2,6 +2,7 @@
 import base64
 import html
 import os
+from urllib.parse import quote
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
     "rtsp_transport;tcp|fflags;nobuffer|max_delay;0|buffer_size;1024"
@@ -444,8 +445,8 @@ def _render_capture_pose_list(pose_index: int, poses: list[str]) -> None:
 
 
 def _inject_sidebar_menu_styles() -> None:
-    st.markdown(
-        """
+    monitor_icon_data_uri = _svg_to_data_uri(_monitor_hero_icon_svg())
+    css = """
         <style>
         [data-testid="stSidebar"] > div:first-child {
             background:
@@ -579,6 +580,22 @@ def _inject_sidebar_menu_styles() -> None:
             color: #BCC4D2;
             font-weight: 600;
             font-size: 1rem;
+            position: relative;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(2) p {
+            padding-left: 1.9rem;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(2) p::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0.02rem;
+            width: 1.35rem;
+            height: 1.35rem;
+            background-image: url("__MONITOR_ICON_DATA_URI__");
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-position: center;
         }
         [data-testid="stSidebar"] div[role="radiogroup"] > label p::first-line {
             color: #F3F6FA;
@@ -646,9 +663,8 @@ def _inject_sidebar_menu_styles() -> None:
             flex: 0 0 auto;
         }
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    """
+    st.markdown(css.replace("__MONITOR_ICON_DATA_URI__", monitor_icon_data_uri), unsafe_allow_html=True)
 
 
 def img_to_base64(path: str) -> str:
@@ -811,6 +827,10 @@ def _monitor_hero_icon_svg() -> str:
         <path d="M29 48.6C30.1 50.3 31.4 51.1 33 51.1C34.6 51.1 35.9 50.3 37 48.6" stroke="#B7C3D9" stroke-width="2.6" stroke-linecap="round"/>
     </svg>
     """
+
+
+def _svg_to_data_uri(svg: str) -> str:
+    return f"data:image/svg+xml;utf8,{quote(svg.strip())}"
 
 
 def _render_context_card(session_state_label: str, selected_subject_label: str, selected_class_label: str, session_data=None):
@@ -1520,7 +1540,7 @@ def recognition_behavior():
     raw_menu_options = admin_menu if user_role == "admin" else teacher_menu
     menu_labels = {
         "Cadastro de Alunos": "🧑‍🎓    Cadastro de Alunos\nGerencie alunos e cadastros",
-        "Monitoramento": "📹    Monitoramento\nAcompanhe as sessões em tempo real",
+        "Monitoramento": "Monitoramento\nAcompanhe as sessões em tempo real",
         "Gráficos": "📈    Gráficos\nVisualize dados e estatísticas",
         "Relatórios": "🗂️    Relatórios\nAcesse análises e relatórios observacionais",
         "Usuários": "🛠️    Usuários\nGerencie contas e manutenção do sistema",
