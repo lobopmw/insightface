@@ -21,6 +21,43 @@ if "users_table_ready" not in st.session_state:
     st.session_state["users_table_ready"] = True
 
 
+def apply_login_styles():
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stForm"] {
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            background: linear-gradient(180deg, rgba(24, 27, 36, 0.96) 0%, rgba(17, 19, 27, 0.94) 100%);
+            border-radius: 22px;
+            padding: 1.2rem 1.1rem 1rem 1.1rem;
+            box-shadow:
+                0 24px 60px rgba(0, 0, 0, 0.42),
+                0 8px 20px rgba(0, 0, 0, 0.22),
+                inset 0 1px 0 rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(14px);
+        }
+
+        div[data-testid="stTextInputRootElement"] {
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        div[data-testid="stTextInputRootElement"] input {
+            font-size: 0.98rem;
+            color: #f3f4f6;
+        }
+
+        div[data-testid="stTextInputRootElement"]:focus-within {
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # Funções de manipulação de "cookies" usando query params
 def set_cookie(key, value):
    
@@ -263,6 +300,7 @@ def main():
         # Redireciona para a interface principal
         recognition_behavior()
     else:
+        apply_login_styles()
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
                 image_col1, image_col2, image_col3 = st.columns([1, 3, 1])
