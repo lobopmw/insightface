@@ -1628,7 +1628,7 @@ def show_behavior_charts(user_context: dict):
         template="plotly_dark",
     )
     fig_bar.update_traces(
-        texttemplate="<b>%{text:.1f}</b>",
+        texttemplate="<b>%{text:.1f} min</b>",
         textposition="outside",
         textfont=dict(size=20, color="#F7FAFF"),
         cliponaxis=False,
