@@ -18,6 +18,7 @@ import streamlit as st
 import pandas as pd
 from datetime import timedelta
 import datetime
+from streamlit_cookies_controller import CookieController
 from control_database_postgres import (
     APP_TIMEZONE,
     DEFAULT_SCHOOL_NAME,
@@ -77,6 +78,8 @@ image_path_classroom = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 image_path_faces     = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/faces.png"))
 image_path_cam       = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/cam_IA.png"))
 image_path_table     = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/table.png"))
+AUTH_COOKIE_NAME = "auth_user_cpf"
+LEGACY_AUTH_QUERY_KEYS = ("authenticated", "cpf", "city", "state", "name", "role")
 
 lateral_timers = {}
 DISTRACTED_TIMEOUT_SECONDS = 2.5
@@ -1583,7 +1586,13 @@ def recognition_behavior():
     st.session_state["current_menu_option"] = menu_option
 
     if logout_clicked:
-        for key in ("authenticated", "cpf", "name", "city", "state", "role"):
+        cookie_controller = CookieController(key="auth_cookies")
+        try:
+            if isinstance(cookie_controller.getAll(), dict) and cookie_controller.get(AUTH_COOKIE_NAME) is not None:
+                cookie_controller.remove(AUTH_COOKIE_NAME, path="/", same_site="strict")
+        except Exception:
+            pass
+        for key in LEGACY_AUTH_QUERY_KEYS:
             if key in st.query_params:
                 del st.query_params[key]
         st.session_state.clear()

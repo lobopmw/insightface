@@ -14,6 +14,9 @@ page_icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../ima
 st.set_page_config(page_title="Monitoramento - SEDUC", page_icon=page_icon_path, layout="wide")
 
 image_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/classroom1.jpg"))
+AUTH_COOKIE_NAME = "auth_user_cpf"
+LEGACY_AUTH_QUERY_KEYS = ("authenticated", "cpf", "city", "state", "name", "role")
+cookie_controller = CookieController(key="auth_cookies")
 
 # Criando/verificando a tabela de usuário uma vez por sessão
 if "users_table_ready" not in st.session_state:
@@ -58,39 +61,91 @@ def apply_login_styles():
     )
 
 
-# Funções de manipulação de "cookies" usando query params
-def set_cookie(key, value):
-   
-    st.query_params[key] = value  # Define diretamente no query_params
+def cookie_controller_is_ready() -> bool:
+    try:
+        cookies = cookie_controller.getAll()
+        return isinstance(cookies, dict)
+    except Exception:
+        return False
 
-def get_cookie(key):
-    
-    return st.query_params.get(key, None)  # Retorna o valor ou None
 
-def delete_cookie(key):
-   
-    if key in st.query_params:
-        del st.query_params[key]  # Remove o query_param correspondente
+def set_auth_cookie(cpf: str) -> None:
+    if not cpf or not cookie_controller_is_ready():
+        return
+    try:
+        cookie_controller.set(AUTH_COOKIE_NAME, cpf, path="/", same_site="strict")
+    except Exception:
+        pass
+
+
+def get_auth_cookie():
+    if not cookie_controller_is_ready():
+        return None
+    try:
+        return cookie_controller.get(AUTH_COOKIE_NAME)
+    except Exception:
+        return None
+
+
+def delete_auth_cookie() -> None:
+    if not cookie_controller_is_ready():
+        return
+    try:
+        if cookie_controller.get(AUTH_COOKIE_NAME) is not None:
+            cookie_controller.remove(AUTH_COOKIE_NAME, path="/", same_site="strict")
+    except Exception:
+        pass
+
+
+def clear_legacy_auth_query_params() -> bool:
+    changed = False
+    for key in LEGACY_AUTH_QUERY_KEYS:
+        if key in st.query_params:
+            del st.query_params[key]
+            changed = True
+    return changed
+
+
+def reset_auth_session_state() -> None:
+    st.session_state["authenticated"] = False
+    st.session_state["cpf"] = None
+    st.session_state["city"] = None
+    st.session_state["state"] = None
+    st.session_state["name"] = None
+    st.session_state["role"] = None
+    st.session_state.pop("user_context", None)
+
+
+def load_user_session_from_cpf(cpf: str) -> bool:
+    if not cpf:
+        return False
+
+    user = get_user_by_cpf(cpf)
+    if not user:
+        return False
+
+    user_context = get_user_context(cpf)
+    st.session_state["authenticated"] = True
+    st.session_state["name"] = user["nome"]
+    st.session_state["cpf"] = user["cpf"]
+    st.session_state["city"] = user["cidade"]
+    st.session_state["state"] = user["estado"]
+    st.session_state["role"] = user["role"]
+    st.session_state["user_context"] = user_context
+    return True
 
 
 # Inicialização do estado da sessão
 if "authenticated" not in st.session_state:
-    # Restaurar estado a partir dos query params
-    if get_cookie("authenticated") == "true":
-        st.session_state['authenticated'] = True
-        st.session_state['cpf'] = get_cookie("cpf")
-        st.session_state['city'] = get_cookie("city")
-        st.session_state['state'] = get_cookie("state")
-        st.session_state['name'] = get_cookie("name")
-        st.session_state['role'] = get_cookie("role")
+    reset_auth_session_state()
+    stored_cpf = get_auth_cookie()
+    if stored_cpf and not load_user_session_from_cpf(stored_cpf):
+        delete_auth_cookie()
+        reset_auth_session_state()
 
-    else:
-        st.session_state["authenticated"] = False
-        st.session_state['cpf'] = None
-        st.session_state['city'] = None
-        st.session_state['state'] = None
-        st.session_state['name'] = None
-        st.session_state['role'] = None
+legacy_auth_params_cleared = clear_legacy_auth_query_params()
+if legacy_auth_params_cleared:
+    st.rerun()
 
 
 #----------------------------------------------------------------------------------------------------------------------------------------#
@@ -137,21 +192,16 @@ def login():
                                     conn.commit()
 
                         if password_matches:
-                            user_context = get_user_context(stored_cpf)
                             st.session_state['authenticated'] = True
                             st.session_state['name'] = stored_nome
                             st.session_state['cpf'] = stored_cpf
                             st.session_state['city'] = stored_city
                             st.session_state['state'] = stored_state
                             st.session_state['role'] = stored_role
-                            st.session_state['user_context'] = user_context
+                            st.session_state['user_context'] = get_user_context(stored_cpf)
 
-                            set_cookie("authenticated", "true")
-                            set_cookie("name", stored_nome)
-                            set_cookie("cpf", stored_cpf)
-                            set_cookie("city", stored_city or "")
-                            set_cookie("state", stored_state or "")
-                            set_cookie("role", stored_role or "professor")
+                            set_auth_cookie(stored_cpf)
+                            clear_legacy_auth_query_params()
 
                             st.success(f"Login realizado com sucesso! Bem-vindo, {stored_nome}")
                             st.rerun()
@@ -270,20 +320,9 @@ def cadastrar_usuario():
         st.sidebar.markdown(f"**{st.session_state['city']} - {st.session_state['state']}**")
    
     if st.sidebar.button("Sair"):
-        # Redefine os estados e cookies do usuário
-        st.session_state['authenticated'] = False
-        st.session_state['cpf'] = None
-        st.session_state['name'] = None
-        st.session_state['city'] = None
-        st.session_state['state'] = None
-        st.session_state['role'] = None
-
-        delete_cookie("authenticated")
-        delete_cookie("cpf")
-        delete_cookie("name")
-        delete_cookie("city")
-        delete_cookie("state")
-        delete_cookie("role")
+        reset_auth_session_state()
+        delete_auth_cookie()
+        clear_legacy_auth_query_params()
        
         st.rerun()
    
