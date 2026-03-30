@@ -22,6 +22,7 @@ from streamlit_cookies_controller import CookieController
 from control_database_postgres import (
     APP_TIMEZONE,
     DEFAULT_SCHOOL_NAME,
+    DEFAULT_LESSON_TYPE,
     SESSION_STATUS_OPEN,
     SESSION_STATUS_CLOSED,
     close_monitoring_session,
@@ -80,6 +81,9 @@ image_path_cam       = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 image_path_table     = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/table.png"))
 AUTH_COOKIE_NAME = "auth_user_cpf"
 LEGACY_AUTH_QUERY_KEYS = ("authenticated", "cpf", "city", "state", "name", "role")
+AUTH_RESTORE_BLOCK_KEY = "auth_restore_blocked"
+AUTH_BOOTSTRAP_KEY = "auth_bootstrap_checked"
+AUTH_BOOTSTRAP_STARTED_AT_KEY = "auth_bootstrap_started_at"
 
 lateral_timers = {}
 DISTRACTED_TIMEOUT_SECONDS = 2.5
@@ -101,6 +105,7 @@ CAPTURE_POSE_LABELS = {
     "lateral_direita": "Direita",
     "cabeca_baixa": "Cabeça baixa",
 }
+LESSON_TYPE_OPTIONS = ["Exposição", "Atividade", "Prova", "Revisão", "Outro"]
 
 
 def _normalize_student_name(value: str) -> str:
@@ -1586,16 +1591,41 @@ def recognition_behavior():
     st.session_state["current_menu_option"] = menu_option
 
     if logout_clicked:
+        st.session_state[AUTH_RESTORE_BLOCK_KEY] = True
+        st.session_state[AUTH_BOOTSTRAP_KEY] = True
+        st.session_state[AUTH_BOOTSTRAP_STARTED_AT_KEY] = 0.0
         cookie_controller = CookieController(key="auth_cookies")
         try:
             if isinstance(cookie_controller.getAll(), dict) and cookie_controller.get(AUTH_COOKIE_NAME) is not None:
                 cookie_controller.remove(AUTH_COOKIE_NAME, path="/", same_site="strict")
         except Exception:
             pass
+        st.session_state["authenticated"] = False
+        st.session_state["cpf"] = None
+        st.session_state["city"] = None
+        st.session_state["state"] = None
+        st.session_state["name"] = None
+        st.session_state["role"] = None
+        st.session_state.pop("user_context", None)
         for key in LEGACY_AUTH_QUERY_KEYS:
             if key in st.query_params:
                 del st.query_params[key]
-        st.session_state.clear()
+        for key in (
+            "monitoring_state",
+            "last_closed_monitoring_session",
+            "episode_manager",
+            "student_lookup",
+            "monitor_runtime",
+            "monitor_waiting_since",
+            "monitor_last_display_frame",
+            "monitor_last_detector_frame_id",
+            "monitor_last_rendered_frame_id",
+            "current_menu_option",
+            "monitor_selected_subject_label",
+            "monitor_selected_class_label",
+            "monitor_selected_lesson_type",
+        ):
+            st.session_state.pop(key, None)
         st.rerun()
     st.sidebar.markdown(
         """
@@ -2328,7 +2358,11 @@ def recognition_behavior():
         header_is_live = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
         selected_subject_id = monitor_state.get("selected_subject_id")
         selected_class_id = monitor_state.get("selected_class_id")
+        selected_lesson_type = monitor_state.get("selected_lesson_type", DEFAULT_LESSON_TYPE)
         video_snapshot = _get_monitor_video_snapshot(current_session_preview)
+        subject_widget_key = "monitor_selected_subject_label"
+        class_widget_key = "monitor_selected_class_label"
+        lesson_type_widget_key = "monitor_selected_lesson_type"
 
         st.markdown(
             """
@@ -2373,14 +2407,18 @@ def recognition_behavior():
                 if selected_subject_id in subject_options:
                     default_subject_index = list(subject_options.keys()).index(selected_subject_id)
                 disable_scope_inputs = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
+                default_subject_label = list(subject_options.values())[default_subject_index]
+                if st.session_state.get(subject_widget_key) not in subject_options.values():
+                    st.session_state[subject_widget_key] = default_subject_label
                 selected_subject_label = st.selectbox(
                     "Disciplina da aula",
                     list(subject_options.values()),
-                    index=default_subject_index,
+                    key=subject_widget_key,
                     disabled=disable_scope_inputs,
                 )
                 selected_subject_id = next(key for key, value in subject_options.items() if value == selected_subject_label)
                 monitor_state["selected_subject_id"] = selected_subject_id
+                st.session_state["monitoring_state"] = monitor_state
 
                 classes_df = list_classes_for_user(user_context, selected_subject_id)
                 if classes_df.empty:
@@ -2394,14 +2432,31 @@ def recognition_behavior():
                 default_class_index = 0
                 if selected_class_id in class_options:
                     default_class_index = list(class_options.keys()).index(selected_class_id)
+                default_class_label = list(class_options.values())[default_class_index]
+                if st.session_state.get(class_widget_key) not in class_options.values():
+                    st.session_state[class_widget_key] = default_class_label
                 selected_class_label = st.selectbox(
                     "Turma acompanhada",
                     list(class_options.values()),
-                    index=default_class_index,
+                    key=class_widget_key,
                     disabled=disable_scope_inputs,
                 )
                 selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
                 monitor_state["selected_class_id"] = selected_class_id
+                st.session_state["monitoring_state"] = monitor_state
+
+                if selected_lesson_type not in LESSON_TYPE_OPTIONS:
+                    selected_lesson_type = DEFAULT_LESSON_TYPE
+                if st.session_state.get(lesson_type_widget_key) not in LESSON_TYPE_OPTIONS:
+                    st.session_state[lesson_type_widget_key] = selected_lesson_type
+                selected_lesson_type = st.selectbox(
+                    "Tipo de aula",
+                    LESSON_TYPE_OPTIONS,
+                    key=lesson_type_widget_key,
+                    disabled=disable_scope_inputs,
+                )
+                monitor_state["selected_lesson_type"] = selected_lesson_type
+                st.session_state["monitoring_state"] = monitor_state
 
             if not professor_has_assignment(user_context["teacher_id"], selected_subject_id, selected_class_id):
                 st.error("O professor autenticado não possui vínculo com a disciplina e a turma selecionadas.")
@@ -2469,6 +2524,7 @@ def recognition_behavior():
                 user_context["teacher_id"],
                 selected_subject_id,
                 selected_class_id,
+                selected_lesson_type,
             )
             session_summary = get_monitoring_session_summary(session_id)
             st.session_state["student_lookup"] = get_student_lookup_for_scope(user_context)
@@ -2476,12 +2532,14 @@ def recognition_behavior():
                 "session_id": session_id,
                 "selected_subject_id": selected_subject_id,
                 "selected_class_id": selected_class_id,
+                "selected_lesson_type": selected_lesson_type,
             }
             st.session_state.pop("last_closed_monitoring_session", None)
             st.session_state["episode_manager"] = BehaviorEpisodeManager(
                 persist_callback=lambda **kwargs: insert_behavior_episode(
                     monitoring_session_id=session_id,
                     student_id=kwargs.get("id_student"),
+                    lesson_type=session_summary.get("lesson_type"),
                     school=school,
                     discipline=session_summary["subject_name"],
                     teacher=user_name,
@@ -2513,6 +2571,7 @@ def recognition_behavior():
                     persist_callback=lambda **kwargs: insert_behavior_episode(
                         monitoring_session_id=current_session["id"],
                         student_id=kwargs.get("id_student"),
+                        lesson_type=current_session.get("lesson_type"),
                         school=school,
                         discipline=current_session["subject_name"],
                         teacher=user_name,
@@ -2594,6 +2653,9 @@ def recognition_behavior():
             st.session_state.pop("episode_manager", None)
             st.session_state.pop("student_lookup", None)
             st.session_state.pop("monitoring_state", None)
+            st.session_state.pop(subject_widget_key, None)
+            st.session_state.pop(class_widget_key, None)
+            st.session_state.pop(lesson_type_widget_key, None)
             st.session_state["last_closed_monitoring_session"] = closed_session
             st.session_state.pop("monitor_waiting_since", None)
             st.session_state.pop("monitor_last_display_frame", None)

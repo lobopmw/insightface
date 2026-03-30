@@ -50,6 +50,8 @@ DEFAULT_SCHOOL_NAME = "Escola Estadual Criança Esperança"
 SESSION_STATUS_OPEN = "em_andamento"
 SESSION_STATUS_CLOSED = "encerrada"
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Araguaina")
+DEFAULT_LESSON_TYPE = "Exposição"
+UNKNOWN_LESSON_TYPE = "Não informado"
 
 
 def get_local_now() -> datetime.datetime:
@@ -205,6 +207,7 @@ def _ensure_schema(cursor) -> None:
             teacher_id INTEGER NOT NULL REFERENCES teachers(id) ON DELETE RESTRICT,
             subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE RESTRICT,
             class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE RESTRICT,
+            lesson_type VARCHAR(50),
             session_date DATE NOT NULL,
             start_time TIMESTAMP WITHOUT TIME ZONE NOT NULL,
             end_time TIMESTAMP WITHOUT TIME ZONE,
@@ -239,6 +242,7 @@ def _ensure_schema(cursor) -> None:
             id SERIAL PRIMARY KEY,
             monitoring_session_id INTEGER REFERENCES monitoring_sessions(id) ON DELETE CASCADE,
             student_id VARCHAR(255) REFERENCES students(id) ON DELETE SET NULL,
+            lesson_type VARCHAR(50),
             school VARCHAR(255),
             discipline VARCHAR(255),
             teacher VARCHAR(255),
@@ -255,10 +259,16 @@ def _ensure_schema(cursor) -> None:
         """
     )
     cursor.execute(
+        "ALTER TABLE monitoring_sessions ADD COLUMN IF NOT EXISTS lesson_type VARCHAR(50)"
+    )
+    cursor.execute(
         "ALTER TABLE behavior_episode ADD COLUMN IF NOT EXISTS monitoring_session_id INTEGER REFERENCES monitoring_sessions(id) ON DELETE CASCADE"
     )
     cursor.execute(
         "ALTER TABLE behavior_episode ADD COLUMN IF NOT EXISTS student_id VARCHAR(255) REFERENCES students(id) ON DELETE SET NULL"
+    )
+    cursor.execute(
+        "ALTER TABLE behavior_episode ADD COLUMN IF NOT EXISTS lesson_type VARCHAR(50)"
     )
     cursor.execute(
         "ALTER TABLE behavior_episode ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP"
@@ -599,21 +609,27 @@ def get_student_lookup_for_scope(user_context: dict):
     return lookup
 
 
-def create_monitoring_session(teacher_id: int, subject_id: int, class_id: int):
+def create_monitoring_session(
+    teacher_id: int,
+    subject_id: int,
+    class_id: int,
+    lesson_type: str = DEFAULT_LESSON_TYPE,
+):
     now = get_local_now()
     with connect_database() as (conn, cursor):
         cursor.execute(
             """
             INSERT INTO monitoring_sessions (
-                teacher_id, subject_id, class_id, session_date, start_time, status
+                teacher_id, subject_id, class_id, lesson_type, session_date, start_time, status
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 teacher_id,
                 subject_id,
                 class_id,
+                lesson_type or DEFAULT_LESSON_TYPE,
                 now.date(),
                 now,
                 SESSION_STATUS_OPEN,
@@ -646,6 +662,7 @@ def get_monitoring_session_summary(session_id: int):
             ms.start_time,
             ms.end_time,
             ms.status,
+            COALESCE(ms.lesson_type, :unknown_lesson_type) AS lesson_type,
             t.id AS teacher_id,
             t.nome AS teacher_name,
             s.id AS subject_id,
@@ -660,7 +677,10 @@ def get_monitoring_session_summary(session_id: int):
         WHERE ms.id = :session_id
     """
     with engine.connect() as conn:
-        row = conn.execute(text(query), {"session_id": session_id}).mappings().fetchone()
+        row = conn.execute(
+            text(query),
+            {"session_id": session_id, "unknown_lesson_type": UNKNOWN_LESSON_TYPE},
+        ).mappings().fetchone()
     return dict(row) if row else None
 
 
@@ -729,6 +749,7 @@ def insert_behavior_episode(
     source="realtime",
     monitoring_session_id=None,
     student_id=None,
+    lesson_type=None,
 ):
     if not student or not behavior or start_time is None or end_time is None or end_time <= start_time:
         return
@@ -744,6 +765,7 @@ def insert_behavior_episode(
             INSERT INTO behavior_episode (
                 monitoring_session_id,
                 student_id,
+                lesson_type,
                 school,
                 discipline,
                 teacher,
@@ -756,11 +778,12 @@ def insert_behavior_episode(
                 date,
                 source
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 monitoring_session_id,
                 student_ref,
+                lesson_type,
                 school or DEFAULT_SCHOOL_NAME,
                 discipline,
                 teacher,
@@ -804,6 +827,7 @@ def _build_behavior_base_query(user_context: dict, extra_conditions=None, extra_
             be.student_id,
             be.student,
             be.behavior,
+            COALESCE(be.lesson_type, ms.lesson_type, %(unknown_lesson_type)s) AS lesson_type,
             be.start_time,
             be.end_time,
             be.duration_seconds,
@@ -831,7 +855,7 @@ def _build_behavior_base_query(user_context: dict, extra_conditions=None, extra_
 def fetch_behavior_dataframe(user_context: dict, filters: dict | None = None):
     filters = filters or {}
     extra_conditions = []
-    params = {}
+    params = {"unknown_lesson_type": UNKNOWN_LESSON_TYPE}
 
     if filters.get("student_name"):
         extra_conditions.append("be.student = %(student_name)s")
@@ -919,6 +943,7 @@ def df_behavior_charts(user_context: dict, filters: dict | None = None):
                 "Duração (s)",
                 "Origem",
                 "Sessão",
+                "Tipo de aula",
             ]
         )
 
@@ -935,6 +960,7 @@ def df_behavior_charts(user_context: dict, filters: dict | None = None):
             "duration_seconds": "Duração (s)",
             "source": "Origem",
             "monitoring_session_id": "Sessão",
+            "lesson_type": "Tipo de aula",
         }
     )[
         [
@@ -949,8 +975,67 @@ def df_behavior_charts(user_context: dict, filters: dict | None = None):
             "Duração (s)",
             "Origem",
             "Sessão",
+            "Tipo de aula",
         ]
     ]
+
+
+def _format_duration_label(total_seconds: float) -> str:
+    if total_seconds >= 60:
+        return f"{total_seconds / 60.0:.1f} min"
+    return f"{total_seconds:.0f} s"
+
+
+def _build_behavior_dashboard_summary(
+    df_behavior: pd.DataFrame,
+    df_context_share: pd.DataFrame,
+) -> list[str]:
+    if df_behavior.empty:
+        return ["Ainda não há dados suficientes para gerar um resumo textual."]
+
+    summary_lines: list[str] = []
+    top_behavior = df_behavior.sort_values("share_percentage", ascending=False).iloc[0]
+    summary_lines.append(
+        f"O aluno permaneceu a maior parte do tempo no comportamento {top_behavior['behavior']} "
+        f"({top_behavior['share_percentage']:.1f}% do tempo monitorado)."
+    )
+
+    non_attentive = df_behavior[
+        df_behavior["behavior"].astype(str).str.lower().isin(["distraído", "distraido", "dormindo", "agitado"])
+    ].sort_values("share_percentage", ascending=False)
+    if not non_attentive.empty:
+        main_non_attentive = non_attentive.iloc[0]
+        summary_lines.append(
+            f"O comportamento {main_non_attentive['behavior']} acumulou "
+            f"{_format_duration_label(float(main_non_attentive['total_seconds']))} no recorte selecionado."
+        )
+
+    if not df_context_share.empty and df_context_share["lesson_type"].nunique() >= 2:
+        context_top = (
+            df_context_share.sort_values(["share_percentage", "total_seconds"], ascending=[False, False])
+            .iloc[0]
+        )
+        summary_lines.append(
+            f"Foi observada maior presença de {context_top['behavior']} em aulas do tipo "
+            f"{context_top['lesson_type']} ({context_top['share_percentage']:.1f}% do tempo nesse contexto)."
+        )
+
+        attentive_by_context = df_context_share[
+            df_context_share["behavior"].astype(str).str.lower().eq("atento")
+        ].sort_values("share_percentage", ascending=False)
+        distracted_by_context = df_context_share[
+            df_context_share["behavior"].astype(str).str.lower().isin(["distraído", "distraido"])
+        ].sort_values("share_percentage", ascending=False)
+        if not attentive_by_context.empty and not distracted_by_context.empty:
+            best_attention = attentive_by_context.iloc[0]
+            highest_distraction = distracted_by_context.iloc[0]
+            if best_attention["lesson_type"] != highest_distraction["lesson_type"]:
+                summary_lines.append(
+                    f"Em {best_attention['lesson_type']}, o nível de atenção foi superior ao observado em "
+                    f"{highest_distraction['lesson_type']}."
+                )
+
+    return summary_lines[:3]
 
 
 def show_behavior_charts(user_context: dict):
@@ -1459,10 +1544,43 @@ def show_behavior_charts(user_context: dict):
         .rename(columns={"duration_seconds": "total_seconds"})
     )
     df_behavior["total_minutes"] = (df_behavior["total_seconds"] / 60.0).round(1)
+    total_monitored_seconds = float(df_behavior["total_seconds"].sum())
+    df_behavior["share_percentage"] = (
+        (df_behavior["total_seconds"] / total_monitored_seconds) * 100.0 if total_monitored_seconds > 0 else 0.0
+    ).round(1)
+    df_behavior["duration_label"] = df_behavior["total_seconds"].apply(_format_duration_label)
 
     df_temporal = df[["behavior", "start_time", "end_time", "duration_seconds"]].copy()
     df_temporal["start_time"] = pd.to_datetime(df_temporal["start_time"])
     df_temporal["end_time"] = pd.to_datetime(df_temporal["end_time"])
+
+    df_context = fetch_behavior_dataframe(
+        user_context,
+        filters={
+            "teacher_id": selected_teacher_id,
+            "subject_id": selected_subject_id,
+            "class_id": selected_class_id,
+            "student_name": selected_student,
+        },
+    )
+    df_context_share = pd.DataFrame(columns=["lesson_type", "behavior", "total_seconds", "share_percentage"])
+    if not df_context.empty:
+        df_context_share = (
+            df_context.groupby(["lesson_type", "behavior"], as_index=False)["duration_seconds"]
+            .sum()
+            .rename(columns={"duration_seconds": "total_seconds"})
+        )
+        lesson_totals = (
+            df_context_share.groupby("lesson_type", as_index=False)["total_seconds"]
+            .sum()
+            .rename(columns={"total_seconds": "lesson_total_seconds"})
+        )
+        df_context_share = df_context_share.merge(lesson_totals, on="lesson_type", how="left")
+        df_context_share["share_percentage"] = (
+            (df_context_share["total_seconds"] / df_context_share["lesson_total_seconds"]) * 100.0
+        ).round(1)
+
+    summary_lines = _build_behavior_dashboard_summary(df_behavior, df_context_share)
 
     cores = {
         "Atento": "#5C6CFF",
@@ -1526,6 +1644,33 @@ def show_behavior_charts(user_context: dict):
         showlegend=False,
     )
 
+    fig_percent = px.bar(
+        df_behavior.sort_values("share_percentage", ascending=False),
+        x="behavior",
+        y="share_percentage",
+        labels={"behavior": "Comportamento", "share_percentage": "Percentual do tempo (%)"},
+        color="behavior",
+        text="share_percentage",
+        color_discrete_map=cores,
+        template="plotly_dark",
+    )
+    fig_percent.update_traces(
+        texttemplate="<b>%{text:.1f}%</b>",
+        textposition="outside",
+        textfont=dict(size=18, color="#F7FAFF"),
+        cliponaxis=False,
+    )
+    fig_percent.update_layout(
+        title_text="",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#DCE3F4"),
+        margin=dict(l=10, r=10, t=10, b=20),
+        xaxis=dict(title=None, gridcolor="rgba(255,255,255,0.07)"),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+        showlegend=False,
+    )
+
     fig_timeline = px.timeline(
         df_temporal,
         x_start="start_time",
@@ -1547,6 +1692,41 @@ def show_behavior_charts(user_context: dict):
         yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
         legend_title_text="Comportamento",
     )
+
+    fig_context = None
+    if not df_context_share.empty and df_context_share["lesson_type"].nunique() >= 1:
+        fig_context = px.bar(
+            df_context_share.sort_values(["lesson_type", "share_percentage"], ascending=[True, False]),
+            x="lesson_type",
+            y="share_percentage",
+            color="behavior",
+            text="share_percentage",
+            barmode="stack",
+            color_discrete_map=cores,
+            labels={
+                "lesson_type": "Tipo de aula",
+                "share_percentage": "Percentual do tempo (%)",
+                "behavior": "Comportamento",
+            },
+            template="plotly_dark",
+        )
+        fig_context.update_traces(
+            texttemplate="%{text:.1f}%",
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(size=14, color="#F7FAFF"),
+            cliponaxis=False,
+        )
+        fig_context.update_layout(
+            title_text="",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#DCE3F4"),
+            margin=dict(l=10, r=10, t=10, b=20),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.07)"),
+            yaxis=dict(gridcolor="rgba(255,255,255,0.08)", ticksuffix="%"),
+            legend_title_text="Comportamento",
+        )
 
     plotly_config = {
         "displaylogo": False,
@@ -1577,61 +1757,113 @@ def show_behavior_charts(user_context: dict):
             unsafe_allow_html=True,
         )
 
-        with st.container(border=True):
-            st.markdown(
-                f"""
-                <div class="charts-section-head" style="margin:-1rem -1rem 1rem -1rem;">
-                    <div class="charts-section-icon">{_chart_icon_svg("summary")}</div>
-                    <div class="charts-section-title">Resumo dos Comportamentos</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            col1, col2 = st.columns(2, gap="large")
-            with col1:
-                with st.container(border=True):
-                    st.markdown(
-                        f"""
-                        <div class="charts-card-mini-title">
-                            <span class="charts-card-mini-icon">{_chart_icon_svg("pie")}</span>
-                            <span>Distribuição do tempo por comportamento</span>
-                        </div>
-                        <div class="charts-card-mini-subtitle">{selected_student} • {data_formatada}</div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                    st.plotly_chart(fig_pie, width="stretch", config=plotly_config)
-            with col2:
+        summary_tab, timeline_tab, lesson_type_tab = st.tabs(
+            ["Resumo", "Linha do tempo", "Tipo de aula"]
+        )
+
+        with summary_tab:
+            with st.container(border=True):
+                st.markdown(
+                    f"""
+                    <div class="charts-section-head" style="margin:-1rem -1rem 1rem -1rem;">
+                        <div class="charts-section-icon">{_chart_icon_svg("summary")}</div>
+                        <div class="charts-section-title">Resumo dos Comportamentos</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                col1, col2 = st.columns(2, gap="large")
+                with col1:
+                    with st.container(border=True):
+                        st.markdown(
+                            f"""
+                            <div class="charts-card-mini-title">
+                                <span class="charts-card-mini-icon">{_chart_icon_svg("pie")}</span>
+                                <span>Distribuição do tempo por comportamento</span>
+                            </div>
+                            <div class="charts-card-mini-subtitle">{selected_student} • {data_formatada}</div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        st.plotly_chart(fig_pie, width="stretch", config=plotly_config)
+                with col2:
+                    with st.container(border=True):
+                        st.markdown(
+                            f"""
+                            <div class="charts-card-mini-title">
+                                <span class="charts-card-mini-icon">{_chart_icon_svg("bar")}</span>
+                                <span>Tempo total por comportamento</span>
+                            </div>
+                            <div class="charts-card-mini-subtitle">{selected_student} • {data_formatada}</div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        st.plotly_chart(fig_bar, width="stretch", config=plotly_config)
+
                 with st.container(border=True):
                     st.markdown(
                         f"""
                         <div class="charts-card-mini-title">
                             <span class="charts-card-mini-icon">{_chart_icon_svg("bar")}</span>
-                            <span>Tempo total por comportamento</span>
+                            <span>Percentual do tempo por comportamento</span>
                         </div>
                         <div class="charts-card-mini-subtitle">{selected_student} • {data_formatada}</div>
                         """,
                         unsafe_allow_html=True,
                     )
-                    st.plotly_chart(fig_bar, width="stretch", config=plotly_config)
+                    st.plotly_chart(fig_percent, width="stretch", config=plotly_config)
 
-        with st.container(border=True):
-            st.markdown(
-                f"""
-                <div class="charts-section-head" style="margin:-1rem -1rem 1rem -1rem;">
-                    <div class="charts-section-icon">{_chart_icon_svg("time")}</div>
-                    <div class="charts-section-title">Linha do tempo da aula</div>
-                </div>
-                <div style='color:#97A2B5; margin-bottom:0.4rem;'>{selected_student} • {data_formatada}</div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(fig_timeline, width="stretch", config=plotly_config)
+                with st.container(border=True):
+                    st.markdown(
+                        f"""
+                        <div class="charts-card-mini-title">
+                            <span class="charts-card-mini-icon">{_chart_icon_svg("summary")}</span>
+                            <span>Resumo interpretável</span>
+                        </div>
+                        <div class="charts-card-mini-subtitle">{selected_student} • leitura objetiva dos dados</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    for line in summary_lines:
+                        st.markdown(f"- {line}")
+
+        with timeline_tab:
+            with st.container(border=True):
+                st.markdown(
+                    f"""
+                    <div class="charts-section-head" style="margin:-1rem -1rem 1rem -1rem;">
+                        <div class="charts-section-icon">{_chart_icon_svg("time")}</div>
+                        <div class="charts-section-title">Linha do tempo da aula</div>
+                    </div>
+                    <div style='color:#97A2B5; margin-bottom:0.4rem;'>{selected_student} • {data_formatada}</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.plotly_chart(fig_timeline, width="stretch", config=plotly_config)
+
+        with lesson_type_tab:
+            with st.container(border=True):
+                st.markdown(
+                    """
+                    <div class="charts-section-head" style="margin:-1rem -1rem 1rem -1rem;">
+                        <div class="charts-section-icon">{}</div>
+                        <div class="charts-section-title">Comparação por tipo de aula</div>
+                    </div>
+                    """.format(_chart_icon_svg("summary")),
+                    unsafe_allow_html=True,
+                )
+                if fig_context is not None and df_context_share["lesson_type"].nunique() >= 2:
+                    st.plotly_chart(fig_context, width="stretch", config=plotly_config)
+                elif fig_context is not None:
+                    st.plotly_chart(fig_context, width="stretch", config=plotly_config)
+                    st.caption("Ainda há apenas um tipo de aula com registros para este aluno no escopo atual.")
+                else:
+                    st.info("Ainda não há dados suficientes para comparar comportamentos entre tipos de aula.")
 
         st.markdown(
             """
             <div class="charts-info-note">
-                Os gráficos apresentam somente os comportamentos registrados no período selecionado.
+                Os gráficos apresentam os comportamentos registrados no período selecionado e, quando houver histórico suficiente, uma comparação adicional por tipo de aula.
             </div>
             """,
             unsafe_allow_html=True,
