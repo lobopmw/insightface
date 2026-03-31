@@ -1074,7 +1074,7 @@ def _render_monitor_frame(
     frame_placeholder.markdown(frame_html, unsafe_allow_html=True)
 
 
-@st.fragment(run_every=0.08)
+@st.fragment(run_every=0.12)
 def process_monitor_fragment(
     school: str,
     discipline: str,
@@ -1104,10 +1104,12 @@ def process_monitor_fragment(
         "rendered_tracks_count": 0,
     }
     if video_stream is not None:
-        if hasattr(video_stream, "read_jpeg_with_meta"):
-            frame_jpeg, _, _ = video_stream.read_jpeg_with_meta()
-        if hasattr(video_stream, "read_with_meta"):
+        if hasattr(video_stream, "read_latest_with_meta"):
+            frame, frame_jpeg, frame_id, _ = video_stream.read_latest_with_meta()
+        elif hasattr(video_stream, "read_with_meta"):
             frame, frame_id, _ = video_stream.read_with_meta()
+            if hasattr(video_stream, "read_jpeg_with_meta"):
+                frame_jpeg, _, _ = video_stream.read_jpeg_with_meta()
         else:
             frame = video_stream.read()
             status = video_stream.get_status() if hasattr(video_stream, "get_status") else {}

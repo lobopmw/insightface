@@ -21,10 +21,14 @@ class VideoStream:
         self.last_frame_at = None
         self.frames_received = 0
         self.frame_id = 0
+        self._decoded_frame_id = -1
+        self._socket_timeout_sec = 1.0
 
     def _connect(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+        s.settimeout(self._socket_timeout_sec)
         s.connect(self.server)
         self.sock = s
         self.connected = True
@@ -52,13 +56,10 @@ class VideoStream:
                 (size,) = struct.unpack(">I", hdr)
                 data = self._recvall(size)
                 if not data: raise RuntimeError("payload")
-                arr = np.frombuffer(data, dtype=np.uint8)
-                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame is None:
-                    continue
                 with self.lock:
-                    self.frame = frame
                     self.frame_jpeg = bytes(data)
+                    self.frame = None
+                    self._decoded_frame_id = -1
                     self.last_frame_at = time.time()
                     self.frames_received += 1
                     self.frame_id += 1
@@ -79,20 +80,64 @@ class VideoStream:
         return self
 
     def read(self):
-        with self.lock:
-            return None if self.frame is None else self.frame.copy()
+        frame, _, _, _ = self.read_with_meta()
+        return frame
 
     def read_with_meta(self):
         with self.lock:
-            if self.frame is None:
-                return None, self.frame_id, self.last_frame_at
-            return self.frame.copy(), self.frame_id, self.last_frame_at
+            frame_id = self.frame_id
+            last_frame_at = self.last_frame_at
+            jpeg = self.frame_jpeg
+            cached_frame = self.frame
+            decoded_frame_id = self._decoded_frame_id
+
+        if jpeg is None:
+            return None, frame_id, last_frame_at
+
+        frame = cached_frame
+        if frame is None or decoded_frame_id != frame_id:
+            arr = np.frombuffer(jpeg, dtype=np.uint8)
+            decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if decoded is None:
+                return None, frame_id, last_frame_at
+            frame = decoded
+            with self.lock:
+                if self.frame_id == frame_id:
+                    self.frame = frame
+                    self._decoded_frame_id = frame_id
+
+        return frame.copy(), frame_id, last_frame_at
 
     def read_jpeg_with_meta(self):
         with self.lock:
             if self.frame_jpeg is None:
                 return None, self.frame_id, self.last_frame_at
             return self.frame_jpeg, self.frame_id, self.last_frame_at
+
+    def read_latest_with_meta(self):
+        with self.lock:
+            frame_id = self.frame_id
+            last_frame_at = self.last_frame_at
+            jpeg = self.frame_jpeg
+            cached_frame = self.frame
+            decoded_frame_id = self._decoded_frame_id
+
+        if jpeg is None:
+            return None, None, frame_id, last_frame_at
+
+        frame = cached_frame
+        if frame is None or decoded_frame_id != frame_id:
+            arr = np.frombuffer(jpeg, dtype=np.uint8)
+            decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if decoded is None:
+                return None, None, frame_id, last_frame_at
+            frame = decoded
+            with self.lock:
+                if self.frame_id == frame_id:
+                    self.frame = frame
+                    self._decoded_frame_id = frame_id
+
+        return frame.copy(), bytes(jpeg), frame_id, last_frame_at
 
     def stop(self):
         self.running = False
