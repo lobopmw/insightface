@@ -1014,6 +1014,7 @@ def _render_monitor_frame(
     jpeg_quality: int = 52,
     jpeg_bytes: bytes | None = None,
     overlays: list[dict] | None = None,
+    frame_shape: tuple[int, int] | None = None,
 ) -> None:
     if frame_placeholder is None:
         return
@@ -1025,15 +1026,22 @@ def _render_monitor_frame(
     ):
         return
 
-    frame_h, frame_w = frame_bgr.shape[:2]
-    display_frame = frame_bgr
-    max_display_width = 1280
-    if frame_w > max_display_width:
-        scale = max_display_width / float(frame_w)
-        resized_h = max(1, int(frame_h * scale))
-        display_frame = cv2.resize(frame_bgr, (max_display_width, resized_h), interpolation=cv2.INTER_AREA)
+    if frame_bgr is not None:
+        frame_h, frame_w = frame_bgr.shape[:2]
+        display_frame = frame_bgr
+        max_display_width = 1280
+        if frame_w > max_display_width:
+            scale = max_display_width / float(frame_w)
+            resized_h = max(1, int(frame_h * scale))
+            display_frame = cv2.resize(frame_bgr, (max_display_width, resized_h), interpolation=cv2.INTER_AREA)
+    elif frame_shape is not None:
+        frame_h, frame_w = int(frame_shape[0]), int(frame_shape[1])
+        display_frame = None
+        max_display_width = 1280
+    else:
+        return
 
-    if jpeg_bytes is None or frame_w > max_display_width:
+    if jpeg_bytes is None or (frame_bgr is not None and frame_w > max_display_width):
         ok, jpg = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
         if not ok:
             return
@@ -1081,7 +1089,30 @@ def _render_monitor_frame(
     frame_placeholder.markdown(frame_html, unsafe_allow_html=True)
 
 
-@st.fragment(run_every=0.10)
+@st.fragment(run_every=0.06)
+def render_monitor_preview_fragment(frame_placeholder):
+    runtime = st.session_state.get("monitor_runtime")
+    video_stream = None if runtime is None else runtime.get("video_stream")
+    if video_stream is None or frame_placeholder is None:
+        return
+    if not hasattr(video_stream, "read_jpeg_with_meta"):
+        return
+    frame_jpeg, frame_id, _ = video_stream.read_jpeg_with_meta()
+    if frame_jpeg is None:
+        return
+    overlays = st.session_state.get("monitor_last_overlays", [])
+    frame_shape = st.session_state.get("monitor_last_frame_shape")
+    _render_monitor_frame(
+        frame_placeholder,
+        frame_bgr=None,
+        frame_id=frame_id,
+        jpeg_bytes=frame_jpeg,
+        overlays=overlays,
+        frame_shape=frame_shape,
+    )
+
+
+@st.fragment(run_every=0.14)
 def process_monitor_fragment(
     school: str,
     discipline: str,
@@ -1373,6 +1404,8 @@ def process_monitor_fragment(
         "rendered_tracks_count": rendered_tracks_count,
         "detector_last_error": detector_last_error,
     }
+    st.session_state["monitor_last_overlays"] = overlays
+    st.session_state["monitor_last_frame_shape"] = frame.shape[:2]
     _render_monitor_frame(frame_placeholder, frame, frame_id=frame_id, jpeg_bytes=frame_jpeg, overlays=overlays)
     return True
 
@@ -1861,6 +1894,8 @@ def recognition_behavior():
             "monitor_last_rendered_frame_id",
             "monitor_last_sync_fallback_frame_id",
             "monitor_last_sync_fallback_at",
+            "monitor_last_overlays",
+            "monitor_last_frame_shape",
             "current_menu_option",
             "monitor_selected_subject_label",
             "monitor_selected_class_label",
@@ -2801,6 +2836,8 @@ def recognition_behavior():
             st.session_state.pop("monitor_last_rendered_frame_id", None)
             st.session_state.pop("monitor_last_sync_fallback_frame_id", None)
             st.session_state.pop("monitor_last_sync_fallback_at", None)
+            st.session_state.pop("monitor_last_overlays", None)
+            st.session_state.pop("monitor_last_frame_shape", None)
             st.rerun()
 
         monitor_state = st.session_state.get("monitoring_state", {})
@@ -2836,6 +2873,8 @@ def recognition_behavior():
             st.session_state.pop("monitor_last_rendered_frame_id", None)
             st.session_state.pop("monitor_last_sync_fallback_frame_id", None)
             st.session_state.pop("monitor_last_sync_fallback_at", None)
+            st.session_state.pop("monitor_last_overlays", None)
+            st.session_state.pop("monitor_last_frame_shape", None)
             st.rerun()
 
         with monitor_right_col:
@@ -2845,6 +2884,7 @@ def recognition_behavior():
                     with st.container(border=True):
                         monitor_status_placeholder = st.empty()
                         monitor_frame_placeholder = st.empty()
+                        render_monitor_preview_fragment(monitor_frame_placeholder)
                         process_monitor_fragment(
                             school=school,
                             discipline=current_session["subject_name"],
@@ -2855,7 +2895,7 @@ def recognition_behavior():
                             box_margin_ratio=BOX_MARGIN_RATIO,
                             show_unknown_boxes=show_unknown_boxes,
                             status_placeholder=monitor_status_placeholder,
-                            frame_placeholder=monitor_frame_placeholder,
+                            frame_placeholder=None,
                         )
                 else:
                     st.markdown(
@@ -2908,6 +2948,8 @@ def recognition_behavior():
             st.session_state.pop("monitor_last_rendered_frame_id", None)
             st.session_state.pop("monitor_last_sync_fallback_frame_id", None)
             st.session_state.pop("monitor_last_sync_fallback_at", None)
+            st.session_state.pop("monitor_last_overlays", None)
+            st.session_state.pop("monitor_last_frame_shape", None)
             st.success("Sessão de monitoramento encerrada com sucesso.")
             st.rerun()
 
