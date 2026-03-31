@@ -2,6 +2,10 @@
 import streamlit as st
 import bcrypt
 import time
+import json
+import hmac
+import base64
+import hashlib
 from sqlalchemy import text
 from control_database_postgres import engine, get_user_by_cpf, get_user_context, registrar_usuario, user_table
 from streamlit_cookies_controller import CookieController
@@ -16,12 +20,18 @@ st.set_page_config(page_title="Monitoramento - SEDUC", page_icon=page_icon_path,
 
 image_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/classroom1.jpg"))
 AUTH_COOKIE_NAME = "auth_user_cpf"
+AUTH_COOKIE_PENDING_KEY = "auth_cookie_pending_value"
+AUTH_QUERY_TOKEN_KEY = "auth_token"
 LEGACY_AUTH_QUERY_KEYS = ("authenticated", "cpf", "city", "state", "name", "role")
 AUTH_RESTORE_BLOCK_KEY = "auth_restore_blocked"
 AUTH_BOOTSTRAP_KEY = "auth_bootstrap_checked"
 AUTH_BOOTSTRAP_STARTED_AT_KEY = "auth_bootstrap_started_at"
 AUTH_BOOTSTRAP_GRACE_SECONDS = 0.6
+AUTH_TOKEN_TTL_SECONDS = 60 * 60 * 12
 cookie_controller = CookieController(key="auth_cookies")
+
+# Mantemos um fallback por token assinado na URL porque a restauração via cookie
+# do Streamlit pode falhar em alguns refreshes do navegador.
 
 # Criando/verificando a tabela de usuário uma vez por sessão
 if "users_table_ready" not in st.session_state:
@@ -74,11 +84,92 @@ def cookie_controller_is_ready() -> bool:
         return False
 
 
+def _get_auth_secret() -> bytes:
+    secret = os.getenv("AUTH_TOKEN_SECRET") or os.getenv("STREAMLIT_SERVER_COOKIE_SECRET") or "insightface-auth-fallback-secret"
+    return secret.encode("utf-8")
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+
+def issue_auth_token(cpf: str) -> str:
+    payload = {
+        "cpf": str(cpf).strip(),
+        "exp": int(time.time()) + AUTH_TOKEN_TTL_SECONDS,
+    }
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    signature = hmac.new(_get_auth_secret(), payload_bytes, hashlib.sha256).digest()
+    return f"{_b64url_encode(payload_bytes)}.{_b64url_encode(signature)}"
+
+
+def read_auth_token() -> str | None:
+    try:
+        token = st.query_params.get(AUTH_QUERY_TOKEN_KEY)
+    except Exception:
+        return None
+    if isinstance(token, list):
+        token = token[0] if token else None
+    return token or None
+
+
+def persist_auth_token(cpf: str) -> None:
+    if not cpf:
+        return
+    try:
+        st.query_params[AUTH_QUERY_TOKEN_KEY] = issue_auth_token(cpf)
+    except Exception:
+        pass
+
+
+def clear_auth_token() -> None:
+    try:
+        if AUTH_QUERY_TOKEN_KEY in st.query_params:
+            del st.query_params[AUTH_QUERY_TOKEN_KEY]
+    except Exception:
+        pass
+
+
+def restore_auth_session_from_token() -> bool:
+    token = read_auth_token()
+    if not token:
+        return False
+    try:
+        payload_part, signature_part = token.split(".", 1)
+        payload_bytes = _b64url_decode(payload_part)
+        expected_signature = hmac.new(_get_auth_secret(), payload_bytes, hashlib.sha256).digest()
+        provided_signature = _b64url_decode(signature_part)
+        if not hmac.compare_digest(expected_signature, provided_signature):
+            clear_auth_token()
+            return False
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        if int(payload.get("exp", 0)) < int(time.time()):
+            clear_auth_token()
+            return False
+        cpf = str(payload.get("cpf", "")).strip()
+        if not cpf:
+            clear_auth_token()
+            return False
+        return load_user_session_from_cpf(cpf)
+    except Exception:
+        clear_auth_token()
+        return False
+
+
 def set_auth_cookie(cpf: str) -> None:
-    if not cpf or not cookie_controller_is_ready():
+    if not cpf:
+        return
+    if not cookie_controller_is_ready():
+        st.session_state[AUTH_COOKIE_PENDING_KEY] = cpf
         return
     try:
         cookie_controller.set(AUTH_COOKIE_NAME, cpf, path="/", same_site="strict")
+        st.session_state[AUTH_COOKIE_PENDING_KEY] = cpf
     except Exception:
         pass
 
@@ -100,6 +191,27 @@ def delete_auth_cookie() -> None:
             cookie_controller.remove(AUTH_COOKIE_NAME, path="/", same_site="strict")
     except Exception:
         pass
+    st.session_state.pop(AUTH_COOKIE_PENDING_KEY, None)
+
+
+def ensure_auth_cookie_synced() -> bool:
+    pending_cpf = st.session_state.get(AUTH_COOKIE_PENDING_KEY)
+    active_cpf = st.session_state.get("cpf") if st.session_state.get("authenticated", False) else None
+    target_cpf = active_cpf or pending_cpf
+    if not target_cpf:
+        return False
+
+    current_cookie = get_auth_cookie()
+    if current_cookie == target_cpf:
+        st.session_state.pop(AUTH_COOKIE_PENDING_KEY, None)
+        return True
+
+    set_auth_cookie(target_cpf)
+    current_cookie = get_auth_cookie()
+    if current_cookie == target_cpf:
+        st.session_state.pop(AUTH_COOKIE_PENDING_KEY, None)
+        return True
+    return False
 
 
 def clear_legacy_auth_query_params() -> bool:
@@ -125,8 +237,10 @@ def request_logout() -> None:
     st.session_state[AUTH_RESTORE_BLOCK_KEY] = True
     st.session_state[AUTH_BOOTSTRAP_KEY] = True
     st.session_state[AUTH_BOOTSTRAP_STARTED_AT_KEY] = 0.0
+    st.session_state.pop(AUTH_COOKIE_PENDING_KEY, None)
     reset_auth_session_state()
     delete_auth_cookie()
+    clear_auth_token()
     clear_legacy_auth_query_params()
 
 
@@ -189,7 +303,8 @@ def restore_auth_session_from_cookie() -> bool:
 if "authenticated" not in st.session_state:
     reset_auth_session_state()
 
-restore_auth_session_from_cookie()
+if not restore_auth_session_from_token():
+    restore_auth_session_from_cookie()
 
 legacy_auth_params_cleared = clear_legacy_auth_query_params()
 if legacy_auth_params_cleared:
@@ -207,7 +322,7 @@ def login():
         with st.form("login_form", clear_on_submit=False):
             cpf = st.text_input("CPF", placeholder="👤 CPF", max_chars=11, label_visibility= "hidden")
             password = st.text_input("Senha", type="password", placeholder="🔒 Senha", label_visibility= "hidden")
-            submit_login = st.form_submit_button("**➡ Login**", use_container_width=True, type="primary")
+            submit_login = st.form_submit_button("**➡ Login**", width="stretch", type="primary")
 
         if submit_login:
             if validar_cpf(cpf):
@@ -249,6 +364,7 @@ def login():
                             st.session_state['user_context'] = get_user_context(stored_cpf)
 
                             set_auth_cookie(stored_cpf)
+                            persist_auth_token(stored_cpf)
                             clear_legacy_auth_query_params()
 
                             st.success(f"Login realizado com sucesso! Bem-vindo, {stored_nome}")
@@ -376,13 +492,21 @@ def cadastrar_usuario():
 # Função principal
 
 def main():
-
     st.session_state.setdefault(AUTH_BOOTSTRAP_STARTED_AT_KEY, time.time())
     restore_auth_session_from_cookie()
 
+    if st.session_state.get("authenticated", False):
+        ensure_auth_cookie_synced()
+        persist_auth_token(st.session_state.get("cpf"))
+        st.session_state[AUTH_BOOTSTRAP_KEY] = True
+        st.session_state[AUTH_BOOTSTRAP_STARTED_AT_KEY] = time.time()
+        if "user_context" not in st.session_state and st.session_state.get("cpf"):
+            st.session_state["user_context"] = get_user_context(st.session_state["cpf"])
+        recognition_behavior()
+        return
+
     if (
-        not st.session_state.get("authenticated", False)
-        and not st.session_state.get(AUTH_RESTORE_BLOCK_KEY, False)
+        not st.session_state.get(AUTH_RESTORE_BLOCK_KEY, False)
         and time.time() - st.session_state.get(AUTH_BOOTSTRAP_STARTED_AT_KEY, time.time())
         < AUTH_BOOTSTRAP_GRACE_SECONDS
     ):
@@ -391,25 +515,16 @@ def main():
         with col2:
             image_col1, image_col2, image_col3 = st.columns([1, 3, 1])
             with image_col2:
-                st.image(image_path, use_container_width=True)
+                st.image(image_path, width="stretch")
         return
 
-    st.session_state[AUTH_BOOTSTRAP_STARTED_AT_KEY] = time.time()
-
-    if st.session_state.get("authenticated", False):
-        if "user_context" not in st.session_state and st.session_state.get("cpf"):
-            st.session_state["user_context"] = get_user_context(st.session_state["cpf"])
-        # Redireciona para a interface principal
-        recognition_behavior()
-    else:
-        apply_login_styles()
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-                image_col1, image_col2, image_col3 = st.columns([1, 3, 1])
-                with image_col2:
-                    st.image(image_path, use_container_width=True)
-
-                login()
+    apply_login_styles()
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        image_col1, image_col2, image_col3 = st.columns([1, 3, 1])
+        with image_col2:
+            st.image(image_path, width="stretch")
+        login()
 
                 
 
