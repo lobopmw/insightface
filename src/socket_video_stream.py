@@ -13,6 +13,7 @@ class VideoStream:
         self.sock = None
         self.running = False
         self.frame = None
+        self.frame_jpeg = None
         self.lock = threading.Lock()
         self.thread = None
         self.connected = False
@@ -57,6 +58,7 @@ class VideoStream:
                     continue
                 with self.lock:
                     self.frame = frame
+                    self.frame_jpeg = bytes(data)
                     self.last_frame_at = time.time()
                     self.frames_received += 1
                     self.frame_id += 1
@@ -85,6 +87,12 @@ class VideoStream:
             if self.frame is None:
                 return None, self.frame_id, self.last_frame_at
             return self.frame.copy(), self.frame_id, self.last_frame_at
+
+    def read_jpeg_with_meta(self):
+        with self.lock:
+            if self.frame_jpeg is None:
+                return None, self.frame_id, self.last_frame_at
+            return self.frame_jpeg, self.frame_id, self.last_frame_at
 
     def stop(self):
         self.running = False

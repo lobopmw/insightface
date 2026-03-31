@@ -39,7 +39,6 @@ from control_database_postgres import (
     upsert_student,
 )
 from register_face_multi_images_avg import generate_student_embedding, load_insightface_data
-from sklearn.metrics.pairwise import cosine_similarity
 from PIL import Image
 from insightface.app import FaceAnalysis
 import warnings
@@ -89,11 +88,13 @@ lateral_timers = {}
 DISTRACTED_TIMEOUT_SECONDS = 2.5
 UNKNOWN_IDENTITY_LABELS = {"desconhecido", "unknown", ""}
 
-FACE_DET_SIZE_GPU = (1280, 1280)
-FACE_DET_SIZE_CPU = (960, 960)
-POSE_IMGSZ_GPU = 1280
-POSE_IMGSZ_CPU = 960
+FACE_DET_SIZE_GPU = (960, 960)
+FACE_DET_SIZE_CPU = (640, 640)
+POSE_IMGSZ_GPU = 960
+POSE_IMGSZ_CPU = 640
 POSE_DET_CONF = 0.22
+FACE_REFRESH_INTERVAL_GPU = 0.20
+FACE_REFRESH_INTERVAL_CPU = 0.45
 FACE_RECOGNITION_BASE_THRESHOLD = 0.45
 FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.41
 FACE_RECOGNITION_SMALL_THRESHOLD = 0.37
@@ -106,6 +107,7 @@ CAPTURE_POSE_LABELS = {
     "cabeca_baixa": "Cabeça baixa",
 }
 LESSON_TYPE_OPTIONS = ["Exposição", "Atividade", "Prova", "Revisão", "Outro"]
+USE_DIRECT_MONITOR_STREAM = False
 
 
 def _normalize_student_name(value: str) -> str:
@@ -715,16 +717,46 @@ def get_runtime_diagnostics():
     return diagnostics
 
 
+def _is_cuda_runtime_error(exc: Exception) -> bool:
+    message = repr(exc).lower()
+    return "cuda" in message and (
+        "busy" in message
+        or "unavailable" in message
+        or "device-side assert" in message
+        or "no kernel image" in message
+        or "invalid device" in message
+        or "acceleratorerror" in message
+    )
+
+
+def _create_pose_model(device: str):
+    pose_model_name = "yolo11m-pose.pt" if device == "cuda" else "yolo11n-pose.pt"
+    return YOLO(pose_model_name)
+
+
+def _create_face_model(device: str):
+    if device == "cuda":
+        model_face = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+        model_face.prepare(ctx_id=0, det_size=FACE_DET_SIZE_GPU)
+        return model_face
+
+    model_face = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+    model_face.prepare(ctx_id=-1, det_size=FACE_DET_SIZE_CPU)
+    return model_face
+
+
 @st.cache_resource(show_spinner=False)
 def build_monitor_runtime(device: str, relay_host: str, relay_port: int):
-    model = YOLO('yolo11m-pose.pt')
-
-    if device == "cuda":
-        model_face = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider","CPUExecutionProvider"])
-        model_face.prepare(ctx_id=0, det_size=FACE_DET_SIZE_GPU)
-    else:
-        model_face = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-        model_face.prepare(ctx_id=-1, det_size=FACE_DET_SIZE_CPU)
+    runtime_device = device
+    try:
+        model = _create_pose_model(runtime_device)
+        model_face = _create_face_model(runtime_device)
+    except Exception as exc:
+        if runtime_device != "cuda" or not _is_cuda_runtime_error(exc):
+            raise
+        runtime_device = "cpu"
+        model = _create_pose_model(runtime_device)
+        model_face = _create_face_model(runtime_device)
 
     known_face_encodings, known_face_names = load_insightface_data()
     known_face_encodings_norm = (
@@ -732,11 +764,13 @@ def build_monitor_runtime(device: str, relay_host: str, relay_port: int):
     ) if len(known_face_encodings) > 0 else None
 
     video_stream = VideoStream((relay_host, relay_port)).start()
-    pose_imgsz = POSE_IMGSZ_GPU if device == "cuda" else POSE_IMGSZ_CPU
+    pose_imgsz = POSE_IMGSZ_GPU if runtime_device == "cuda" else POSE_IMGSZ_CPU
     detector = DetectorWorker(
         model,
         model_face,
-        device,
+        runtime_device,
+        min_inference_interval=0.08 if runtime_device == "cuda" else 0.18,
+        face_refresh_interval=FACE_REFRESH_INTERVAL_GPU if runtime_device == "cuda" else FACE_REFRESH_INTERVAL_CPU,
         pose_imgsz=pose_imgsz,
         pose_conf=POSE_DET_CONF,
     ).start()
@@ -748,6 +782,7 @@ def build_monitor_runtime(device: str, relay_host: str, relay_port: int):
         "known_face_names": known_face_names,
         "video_stream": video_stream,
         "detector": detector,
+        "runtime_device": runtime_device,
     }
 
 
@@ -972,7 +1007,74 @@ def render_context_fragment(session_state_label: str, selected_subject_label: st
     _render_context_card(session_state_label, selected_subject_label, selected_class_label, session_data)
 
 
-@st.fragment(run_every=0.6)
+def _render_monitor_frame(
+    frame_placeholder,
+    frame_bgr,
+    frame_id: int,
+    jpeg_quality: int = 60,
+    jpeg_bytes: bytes | None = None,
+    overlays: list[dict] | None = None,
+) -> None:
+    if frame_placeholder is None:
+        return
+    cached = st.session_state.get("monitor_last_display_frame")
+    if (
+        isinstance(cached, dict)
+        and cached.get("frame_id") == frame_id
+        and cached.get("html")
+    ):
+        return
+
+    if jpeg_bytes is None:
+        ok, jpg = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
+        if not ok:
+            return
+        jpeg_bytes = jpg.tobytes()
+
+    jpg_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+    frame_h, frame_w = frame_bgr.shape[:2]
+    overlay_html = ""
+    for overlay in overlays or []:
+        x1 = max(0.0, min(100.0, (float(overlay["x1"]) / max(1, frame_w)) * 100.0))
+        y1 = max(0.0, min(100.0, (float(overlay["y1"]) / max(1, frame_h)) * 100.0))
+        x2 = max(0.0, min(100.0, (float(overlay["x2"]) / max(1, frame_w)) * 100.0))
+        y2 = max(0.0, min(100.0, (float(overlay["y2"]) / max(1, frame_h)) * 100.0))
+        width = max(0.5, x2 - x1)
+        height = max(0.5, y2 - y1)
+        color = html.escape(str(overlay.get("color", "#22c55e")))
+        label = html.escape(str(overlay.get("label", "")))
+        label_top = max(0.0, y1 - 5.0)
+        overlay_html += (
+            f"<div style='position:absolute; left:{x1:.3f}%; top:{y1:.3f}%; "
+            f"width:{width:.3f}%; height:{height:.3f}%; border:2px solid {color}; "
+            "border-radius:10px; box-sizing:border-box; pointer-events:none;'></div>"
+        )
+        if label:
+            overlay_html += (
+                f"<div style='position:absolute; left:{x1:.3f}%; top:{label_top:.3f}%; "
+                f"background:{color}; color:#fff; padding:4px 8px; border-radius:8px; "
+                "font-size:12px; font-weight:600; line-height:1.1; white-space:nowrap; "
+                "box-sizing:border-box; pointer-events:none;'>"
+                f"{label}</div>"
+            )
+    frame_html = (
+        "<div style='width:100%; min-height:430px; display:flex; align-items:center; justify-content:center;'>"
+        "<div style='position:relative; width:100%;'>"
+        f"<img src='data:image/jpeg;base64,{jpg_b64}' "
+        "style='display:block; width:100%; height:auto; border-radius:18px;' "
+        "alt='Monitoramento em tempo real' />"
+        f"{overlay_html}"
+        "</div>"
+        "</div>"
+    )
+    st.session_state["monitor_last_display_frame"] = {
+        "frame_id": frame_id,
+        "html": frame_html,
+    }
+    frame_placeholder.markdown(frame_html, unsafe_allow_html=True)
+
+
+@st.fragment(run_every=0.08)
 def process_monitor_fragment(
     school: str,
     discipline: str,
@@ -994,6 +1096,7 @@ def process_monitor_fragment(
     student_lookup = st.session_state.get("student_lookup", {})
 
     frame = None
+    frame_jpeg = None
     frame_id = 0
     st.session_state["monitor_live_stats"] = {
         "detected_faces_count": 0,
@@ -1001,6 +1104,8 @@ def process_monitor_fragment(
         "rendered_tracks_count": 0,
     }
     if video_stream is not None:
+        if hasattr(video_stream, "read_jpeg_with_meta"):
+            frame_jpeg, _, _ = video_stream.read_jpeg_with_meta()
         if hasattr(video_stream, "read_with_meta"):
             frame, frame_id, _ = video_stream.read_with_meta()
         else:
@@ -1047,7 +1152,34 @@ def process_monitor_fragment(
         except TypeError:
             detector.update_frame(frame)
         st.session_state["monitor_last_detector_frame_id"] = frame_id
-    results, faces = detector.get_outputs()
+    detector_status = detector.get_status() if detector is not None and hasattr(detector, "get_status") else {}
+    detector_last_output_at = detector_status.get("last_output_at")
+    detector_last_error = detector_status.get("last_error")
+    detector_last_processed_frame_id = detector_status.get("last_processed_frame_id", -1)
+    detector_stale = (
+        detector is not None
+        and (
+            detector_last_output_at in (None, 0.0)
+            or (time.time() - float(detector_last_output_at)) > 1.2
+            or detector_last_error
+        )
+    )
+
+    if detector is not None and detector_stale and frame_id != detector_last_processed_frame_id:
+        last_fallback_frame_id = st.session_state.get("monitor_last_sync_fallback_frame_id", -1)
+        last_fallback_at = st.session_state.get("monitor_last_sync_fallback_at", 0.0)
+        if frame_id != last_fallback_frame_id and (time.time() - last_fallback_at) > 0.35:
+            try:
+                detector.force_process(frame, frame_id=frame_id)
+                st.session_state["monitor_last_sync_fallback_frame_id"] = frame_id
+                st.session_state["monitor_last_sync_fallback_at"] = time.time()
+                detector_status = detector.get_status() if hasattr(detector, "get_status") else detector_status
+                detector_last_error = detector_status.get("last_error")
+            except Exception as exc:
+                detector_last_error = repr(exc)
+                st.session_state["monitor_last_sync_fallback_at"] = time.time()
+
+    results, faces = detector.get_outputs() if detector is not None else ([], [])
 
     face_named = []
     detected_faces_count = 0
@@ -1064,6 +1196,7 @@ def process_monitor_fragment(
 
     rendered_tracks_count = 0
     hidden_unknown_tracks_count = 0
+    overlays = []
 
     if results:
         for result in results:
@@ -1168,25 +1301,19 @@ def process_monitor_fragment(
                     hidden_unknown_tracks_count += 1
                     continue
 
-                box_color = (0, 0, 255) if current_behavior in ("Agitado", "Dormindo", "Distraido") else (0, 255, 0)
-                cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), box_color, 2)
+                box_color_hex = "#ef4444" if current_behavior in ("Agitado", "Dormindo", "Distraido") else "#22c55e"
                 label_text = f"{name_student} - {current_behavior}"
                 rendered_tracks_count += 1
-
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                scale = 0.6
-                thickness = 2
-                pad_x, pad_y = 6, 4
-                (text_w, text_h), _ = cv2.getTextSize(label_text, font, scale, thickness)
-
-                tx = int(x_min)
-                ty = int(y_min)
-                top = ty - text_h - 2 * pad_y
-                if top < 0:
-                    top = ty
-
-                cv2.rectangle(frame, (tx, top), (tx + text_w + 2 * pad_x, top + text_h + 2 * pad_y), box_color, -1)
-                cv2.putText(frame, label_text, (tx + pad_x, top + text_h + pad_y - 1), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+                overlays.append(
+                    {
+                        "x1": x_min,
+                        "y1": y_min,
+                        "x2": x_max,
+                        "y2": y_max,
+                        "label": label_text,
+                        "color": box_color_hex,
+                    }
+                )
 
                 if show_debug and have_all:
                     shoulder_y = (ls[1] + rs[1]) / 2.0
@@ -1203,14 +1330,27 @@ def process_monitor_fragment(
                     ]
                     y0 = 24
                     for i, text in enumerate(hud_lines):
-                        cv2.putText(frame, text, (10, y0 + int(i * 22 * debug_font)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, debug_font, (255, 255, 0), 2)
+                        overlays.append(
+                            {
+                                "x1": 10,
+                                "y1": y0 + int(i * 22 * debug_font),
+                                "x2": max(180, 10 + len(text) * 9),
+                                "y2": y0 + int(i * 22 * debug_font) + 24,
+                                "label": text,
+                                "color": "#0ea5e9",
+                            }
+                        )
 
     last_rendered_frame_id = st.session_state.get("monitor_last_rendered_frame_id", -1)
     if frame_id != last_rendered_frame_id:
         st.session_state["monitor_last_rendered_frame_id"] = frame_id
 
-    if known_face_encodings_norm is None or len(known_face_names) == 0:
+    if detector_last_error:
+        status_placeholder.warning(
+            "A deteccao entrou em modo de recuperacao. "
+            f"Ultimo erro do detector: {detector_last_error}"
+        )
+    elif known_face_encodings_norm is None or len(known_face_names) == 0:
         status_placeholder.warning(
             "Nenhum embedding de aluno foi carregado. "
             "Rode o processo de geracao de embeddings para habilitar o reconhecimento facial."
@@ -1218,13 +1358,13 @@ def process_monitor_fragment(
     else:
         status_placeholder.empty()
 
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     st.session_state["monitor_live_stats"] = {
         "detected_faces_count": detected_faces_count,
         "recognized_faces_count": recognized_faces_count,
         "rendered_tracks_count": rendered_tracks_count,
+        "detector_last_error": detector_last_error,
     }
-    frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
+    _render_monitor_frame(frame_placeholder, frame, frame_id=frame_id, jpeg_bytes=frame_jpeg, overlays=overlays)
     return True
 
 # ---------------- Associação por IoU + memória curta de nome ----------------
@@ -1261,7 +1401,7 @@ def identify_face(face, known_face_encodings_norm, known_face_names):
 
     emb = face.embedding
     emb = emb / (np.linalg.norm(emb) + 1e-6)
-    sims = cosine_similarity([emb], known_face_encodings_norm)[0]
+    sims = np.dot(known_face_encodings_norm, emb)
     best_idx = int(np.argmax(sims))
     best_score = float(sims[best_idx])
 
@@ -1302,7 +1442,16 @@ class DetectorWorker:
     Roda YOLO (pose) + InsightFace em background, sempre no frame mais recente.
     Evita fila e mantém o vídeo "ao vivo".
     """
-    def __init__(self, model_pose, model_face, device, min_inference_interval=0.18, pose_imgsz=960, pose_conf=0.22):
+    def __init__(
+        self,
+        model_pose,
+        model_face,
+        device,
+        min_inference_interval=0.18,
+        face_refresh_interval=0.20,
+        pose_imgsz=960,
+        pose_conf=0.22,
+    ):
         self.model_pose = model_pose
         self.model_face = model_face
         self.device = device
@@ -1317,6 +1466,13 @@ class DetectorWorker:
         self._th = None
         self._last_inference_at = 0.0
         self._min_inference_interval = float(min_inference_interval)
+        self._face_refresh_interval = float(face_refresh_interval)
+        self._last_face_inference_at = 0.0
+        self._last_output_at = 0.0
+        self._last_error = None
+        self._last_processed_frame_id = -1
+        self._processed_frames = 0
+        self._fallback_mode = None
 
     def start(self):
         self._running = True
@@ -1336,7 +1492,7 @@ class DetectorWorker:
         with self._lock:
             if frame_id is not None and frame_id <= self._latest_frame_id:
                 return
-            self._latest_frame = frame
+            self._latest_frame = frame.copy()
             if frame_id is None:
                 self._latest_frame_id += 1
             else:
@@ -1348,26 +1504,28 @@ class DetectorWorker:
             results = self._last_results
         return results, faces
 
-    def _run(self):
-        while self._running:
-            frame = None
-            frame_id = -1
-            with self._lock:
-                frame = self._latest_frame
-                frame_id = self._latest_frame_id
-                self._latest_frame = None
-            if frame is None:
-                time.sleep(0.003)
-                continue
-            if frame_id < 0:
-                time.sleep(0.003)
-                continue
-            now = time.time()
-            if now - self._last_inference_at < self._min_inference_interval:
-                time.sleep(0.01)
-                continue
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            faces = self.model_face.get(rgb)
+    def get_status(self):
+        with self._lock:
+            return {
+                "last_output_at": self._last_output_at,
+                "last_error": self._last_error,
+                "last_processed_frame_id": self._last_processed_frame_id,
+                "processed_frames": self._processed_frames,
+                "device": self.device,
+                "fallback_mode": self._fallback_mode,
+            }
+
+    def _switch_to_cpu(self, reason: Exception | str | None = None):
+        self.model_pose = _create_pose_model("cpu")
+        self.model_face = _create_face_model("cpu")
+        self.device = "cpu"
+        self.pose_imgsz = POSE_IMGSZ_CPU
+        self._face_refresh_interval = FACE_REFRESH_INTERVAL_CPU
+        self._fallback_mode = "cpu"
+        self._last_error = None if reason is None else f"Detector mudou para CPU: {reason}"
+
+    def _infer(self, frame):
+        try:
             results = self.model_pose.predict(
                 frame,
                 show=False,
@@ -1377,10 +1535,82 @@ class DetectorWorker:
                 conf=self.pose_conf,
                 half=(self.device == "cuda"),
             )
+            now = time.time()
+            should_refresh_faces = (
+                not self._last_faces
+                or (now - self._last_face_inference_at) >= self._face_refresh_interval
+            )
+            if should_refresh_faces:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                faces = self.model_face.get(rgb)
+                self._last_face_inference_at = now
+            else:
+                faces = self._last_faces
+            return results, faces
+        except Exception as exc:
+            if self.device == "cuda" and _is_cuda_runtime_error(exc):
+                self._switch_to_cpu(reason=exc)
+                results = self.model_pose.predict(
+                    frame,
+                    show=False,
+                    device=self.device,
+                    verbose=False,
+                    imgsz=self.pose_imgsz,
+                    conf=self.pose_conf,
+                    half=False,
+                )
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                faces = self.model_face.get(rgb)
+                self._last_face_inference_at = time.time()
+                return results, faces
+            raise
+
+    def force_process(self, frame, frame_id=None):
+        results, faces = self._infer(frame)
+        with self._lock:
+            self._last_faces = faces
+            self._last_results = results
+            self._last_output_at = time.time()
+            self._last_error = None
+            self._processed_frames += 1
+            if frame_id is not None:
+                self._last_processed_frame_id = frame_id
+                if frame_id == self._latest_frame_id:
+                    self._latest_frame = None
+        self._last_inference_at = time.time()
+        return results, faces
+
+    def _run(self):
+        while self._running:
             with self._lock:
-                self._last_faces = faces
-                self._last_results = results
-            self._last_inference_at = time.time()
+                frame = None if self._latest_frame is None else self._latest_frame.copy()
+                frame_id = self._latest_frame_id
+            if frame is None:
+                time.sleep(0.003)
+                continue
+            if frame_id < 0:
+                time.sleep(0.003)
+                continue
+            now = time.time()
+            if now - self._last_inference_at < self._min_inference_interval:
+                time.sleep(0.005)
+                continue
+            try:
+                results, faces = self._infer(frame)
+                with self._lock:
+                    self._last_faces = faces
+                    self._last_results = results
+                    self._last_output_at = time.time()
+                    self._last_error = None
+                    self._last_processed_frame_id = frame_id
+                    self._processed_frames += 1
+                    if frame_id == self._latest_frame_id:
+                        self._latest_frame = None
+                self._last_inference_at = time.time()
+            except Exception as exc:
+                with self._lock:
+                    self._last_error = repr(exc)
+                time.sleep(0.05)
 
 # ---------------- Funções auxiliares de comportamento ----------------
 def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5, cam_side="LEFT", cam_offset=0.12):
@@ -1620,6 +1850,8 @@ def recognition_behavior():
             "monitor_last_display_frame",
             "monitor_last_detector_frame_id",
             "monitor_last_rendered_frame_id",
+            "monitor_last_sync_fallback_frame_id",
+            "monitor_last_sync_fallback_at",
             "current_menu_option",
             "monitor_selected_subject_label",
             "monitor_selected_class_label",
@@ -2558,6 +2790,8 @@ def recognition_behavior():
             st.session_state.pop("monitor_last_display_frame", None)
             st.session_state.pop("monitor_last_detector_frame_id", None)
             st.session_state.pop("monitor_last_rendered_frame_id", None)
+            st.session_state.pop("monitor_last_sync_fallback_frame_id", None)
+            st.session_state.pop("monitor_last_sync_fallback_at", None)
             st.rerun()
 
         monitor_state = st.session_state.get("monitoring_state", {})
@@ -2591,6 +2825,8 @@ def recognition_behavior():
             st.session_state.pop("monitor_last_display_frame", None)
             st.session_state.pop("monitor_last_detector_frame_id", None)
             st.session_state.pop("monitor_last_rendered_frame_id", None)
+            st.session_state.pop("monitor_last_sync_fallback_frame_id", None)
+            st.session_state.pop("monitor_last_sync_fallback_at", None)
             st.rerun()
 
         with monitor_right_col:
@@ -2661,6 +2897,8 @@ def recognition_behavior():
             st.session_state.pop("monitor_last_display_frame", None)
             st.session_state.pop("monitor_last_detector_frame_id", None)
             st.session_state.pop("monitor_last_rendered_frame_id", None)
+            st.session_state.pop("monitor_last_sync_fallback_frame_id", None)
+            st.session_state.pop("monitor_last_sync_fallback_at", None)
             st.success("Sessão de monitoramento encerrada com sucesso.")
             st.rerun()
 

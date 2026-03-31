@@ -180,10 +180,10 @@ def main():
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=5555)
     ap.add_argument("--http-port", type=int, default=8555)
-    ap.add_argument("--quality", type=int, default=85, help="Qualidade JPEG (50–95). 85 = bom e rápido")
+    ap.add_argument("--quality", type=int, default=70, help="Qualidade JPEG (50–95). 70 = menor latencia com qualidade suficiente")
     ap.add_argument("--width", type=int, default=None)
     ap.add_argument("--height", type=int, default=None)
-    ap.add_argument("--send-fps", type=int, default=None, help="Limitar FPS de envio (ex.: 15, 20, 25). Se omitido, envia o mais rápido possível, porém só quando chega frame novo.")
+    ap.add_argument("--send-fps", type=int, default=24, help="Limitar FPS de envio (ex.: 15, 20, 24, 30). 24 costuma dar boa fluidez com baixa latencia.")
     args = ap.parse_args()
     start_relay(args.rtsp, host=args.host, port=args.port, http_port=args.http_port, quality=args.quality,
                 width=args.width, height=args.height, send_fps=args.send_fps)

@@ -55,15 +55,15 @@ services:
       - --http-port
       - ${RELAY_HTTP_PORT:-8555}
       - --quality
-      - ${RELAY_QUALITY:-85}
+      - ${RELAY_QUALITY:-70}
       - --send-fps
-      - ${RELAY_SEND_FPS:-15}
+      - ${RELAY_SEND_FPS:-24}
     environment:
       RTSP_URL: ${RTSP_URL?Defina RTSP_URL no arquivo .env}
       RELAY_PORT: ${RELAY_PORT:-5555}
       RELAY_HTTP_PORT: ${RELAY_HTTP_PORT:-8555}
-      RELAY_QUALITY: ${RELAY_QUALITY:-85}
-      RELAY_SEND_FPS: ${RELAY_SEND_FPS:-15}
+      RELAY_QUALITY: ${RELAY_QUALITY:-70}
+      RELAY_SEND_FPS: ${RELAY_SEND_FPS:-24}
     ports:
       - "${RELAY_PORT:-5555}:${RELAY_PORT:-5555}"
       - "${RELAY_HTTP_PORT:-8555}:${RELAY_HTTP_PORT:-8555}"
