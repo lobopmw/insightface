@@ -1011,7 +1011,7 @@ def _render_monitor_frame(
     frame_placeholder,
     frame_bgr,
     frame_id: int,
-    jpeg_quality: int = 60,
+    jpeg_quality: int = 52,
     jpeg_bytes: bytes | None = None,
     overlays: list[dict] | None = None,
 ) -> None:
@@ -1025,14 +1025,21 @@ def _render_monitor_frame(
     ):
         return
 
-    if jpeg_bytes is None:
-        ok, jpg = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
+    frame_h, frame_w = frame_bgr.shape[:2]
+    display_frame = frame_bgr
+    max_display_width = 1280
+    if frame_w > max_display_width:
+        scale = max_display_width / float(frame_w)
+        resized_h = max(1, int(frame_h * scale))
+        display_frame = cv2.resize(frame_bgr, (max_display_width, resized_h), interpolation=cv2.INTER_AREA)
+
+    if jpeg_bytes is None or frame_w > max_display_width:
+        ok, jpg = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
         if not ok:
             return
         jpeg_bytes = jpg.tobytes()
 
     jpg_b64 = base64.b64encode(jpeg_bytes).decode("ascii")
-    frame_h, frame_w = frame_bgr.shape[:2]
     overlay_html = ""
     for overlay in overlays or []:
         x1 = max(0.0, min(100.0, (float(overlay["x1"]) / max(1, frame_w)) * 100.0))
@@ -1074,7 +1081,7 @@ def _render_monitor_frame(
     frame_placeholder.markdown(frame_html, unsafe_allow_html=True)
 
 
-@st.fragment(run_every=0.12)
+@st.fragment(run_every=0.10)
 def process_monitor_fragment(
     school: str,
     discipline: str,
