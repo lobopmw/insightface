@@ -1057,6 +1057,8 @@ def _render_monitor_frame(
         width = max(0.5, x2 - x1)
         height = max(0.5, y2 - y1)
         color = html.escape(str(overlay.get("color", "#22c55e")))
+        label_bg = html.escape(str(overlay.get("label_bg", color)))
+        label_fg = html.escape(str(overlay.get("label_fg", "#ffffff")))
         label = html.escape(str(overlay.get("label", "")))
         label_top = max(0.0, y1 - 5.0)
         overlay_html += (
@@ -1067,7 +1069,7 @@ def _render_monitor_frame(
         if label:
             overlay_html += (
                 f"<div style='position:absolute; left:{x1:.3f}%; top:{label_top:.3f}%; "
-                f"background:{color}; color:#fff; padding:4px 8px; border-radius:8px; "
+                f"background:{label_bg}; color:{label_fg}; padding:4px 8px; border-radius:8px; "
                 "font-size:12px; font-weight:600; line-height:1.1; white-space:nowrap; "
                 "box-sizing:border-box; pointer-events:none;'>"
                 f"{label}</div>"
@@ -1341,7 +1343,10 @@ def process_monitor_fragment(
                     hidden_unknown_tracks_count += 1
                     continue
 
-                box_color_hex = "#ef4444" if current_behavior in ("Agitado", "Dormindo", "Distraido") else "#22c55e"
+                is_negative_behavior = current_behavior in ("Agitado", "Dormindo", "Distraido")
+                box_color_hex = "#ef4444" if is_negative_behavior else "#22c55e"
+                label_bg_hex = "#991b1b" if is_negative_behavior else "#dcfce7"
+                label_fg_hex = "#ffffff" if is_negative_behavior else "#14532d"
                 label_text = f"{name_student} - {current_behavior}"
                 rendered_tracks_count += 1
                 overlays.append(
@@ -1352,6 +1357,8 @@ def process_monitor_fragment(
                         "y2": y_max,
                         "label": label_text,
                         "color": box_color_hex,
+                        "label_bg": label_bg_hex,
+                        "label_fg": label_fg_hex,
                     }
                 )
 
