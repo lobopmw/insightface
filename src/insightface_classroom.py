@@ -88,16 +88,16 @@ lateral_timers = {}
 DISTRACTED_TIMEOUT_SECONDS = 2.5
 UNKNOWN_IDENTITY_LABELS = {"desconhecido", "unknown", ""}
 
-FACE_DET_SIZE_GPU = (960, 960)
-FACE_DET_SIZE_CPU = (640, 640)
-POSE_IMGSZ_GPU = 960
-POSE_IMGSZ_CPU = 640
-POSE_DET_CONF = 0.22
-FACE_REFRESH_INTERVAL_GPU = 0.20
-FACE_REFRESH_INTERVAL_CPU = 0.45
+FACE_DET_SIZE_GPU = (1280, 1280)
+FACE_DET_SIZE_CPU = (800, 800)
+POSE_IMGSZ_GPU = 1280
+POSE_IMGSZ_CPU = 800
+POSE_DET_CONF = 0.18
+FACE_REFRESH_INTERVAL_GPU = 0.12
+FACE_REFRESH_INTERVAL_CPU = 0.30
 FACE_RECOGNITION_BASE_THRESHOLD = 0.45
-FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.41
-FACE_RECOGNITION_SMALL_THRESHOLD = 0.37
+FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.39
+FACE_RECOGNITION_SMALL_THRESHOLD = 0.34
 FACE_RECOGNITION_MIN_MARGIN = 0.015
 
 CAPTURE_POSE_LABELS = {
@@ -1253,6 +1253,7 @@ def process_monitor_fragment(
 
                 current_behavior = "Atento"
                 have_all = False
+                pose_conf_threshold = _adaptive_keypoint_conf_threshold(person_keypoints)
 
                 if person_keypoints.shape[0] > 10:
                     nose = person_keypoints[0]
@@ -1261,12 +1262,12 @@ def process_monitor_fragment(
                     lw, rw = person_keypoints[9], person_keypoints[10]
 
                     confs = [p[2] for p in [nose, ls, rs, le, re, lw, rw]]
-                    have_all = all(c > confidence_threshold for c in confs)
+                    have_all = all(c > pose_conf_threshold for c in confs)
                     if have_all:
-                        current_behavior = classify_behavior(nose, ls, rs, le, re, lw, rw, confidence_threshold)
+                        current_behavior = classify_behavior(nose, ls, rs, le, re, lw, rw, pose_conf_threshold)
 
-                x_coords = [p[0] for p in person_keypoints if p[2] > confidence_threshold]
-                y_coords = [p[1] for p in person_keypoints if p[2] > confidence_threshold]
+                x_coords = [p[0] for p in person_keypoints if p[2] > pose_conf_threshold]
+                y_coords = [p[1] for p in person_keypoints if p[2] > pose_conf_threshold]
                 if not x_coords or not y_coords:
                     continue
                 x_min, x_max = int(min(x_coords)), int(max(x_coords))
@@ -1293,12 +1294,12 @@ def process_monitor_fragment(
                     ls = person_keypoints[5]
                     rs = person_keypoints[6]
 
-                    if nose[2] > confidence_threshold or (ls[2] > confidence_threshold and rs[2] > confidence_threshold):
+                    if nose[2] > pose_conf_threshold or (ls[2] > pose_conf_threshold and rs[2] > pose_conf_threshold):
                         lateral_status = is_lateral_view(
-                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=confidence_threshold
+                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=pose_conf_threshold
                         )
                         back_status = is_back_view(
-                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=confidence_threshold
+                            nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=pose_conf_threshold
                         )
                         new_behavior = check_distracted_status(
                             behavior_key, (lateral_status or back_status), lateral_timers, timeout=DISTRACTED_TIMEOUT_SECONDS
@@ -1807,6 +1808,26 @@ def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
 
     # --- fallback ---
     return "Atento"
+
+
+def _adaptive_keypoint_conf_threshold(person_keypoints) -> float:
+    visible_points = [p for p in person_keypoints if len(p) >= 3 and float(p[2]) > 0.08]
+    if not visible_points:
+        return 0.22
+
+    xs = [float(p[0]) for p in visible_points]
+    ys = [float(p[1]) for p in visible_points]
+    width = max(xs) - min(xs)
+    height = max(ys) - min(ys)
+    size = max(width, height)
+
+    if size < 110:
+        return 0.14
+    if size < 180:
+        return 0.17
+    if size < 260:
+        return 0.19
+    return 0.22
 
 
 # ------------------ CRIPTOGRAFAR NOMES ---------------------------
