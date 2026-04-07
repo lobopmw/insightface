@@ -53,10 +53,16 @@ from ui.report_page import render_report_page
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-# Suavização de "Dormindo"
+# Suavização local dos comportamentos.
+# "Atento" deixa de ser fallback automático e passa a exigir evidência estável.
 sleep_smoother = {}
-ENTER_SLEEP_FRAMES = 6  
-EXIT_SLEEP_FRAMES  = 10  
+ENTER_SLEEP_FRAMES = 6
+EXIT_SLEEP_FRAMES = 10
+ENTER_QUESTION_FRAMES = 4
+ENTER_ATTENTIVE_FRAMES = 5
+ENTER_AGITATED_FRAMES = 3
+ENTER_DISTRACTED_FRAMES = 3
+ENTER_UNDETERMINED_FRAMES = 2
 
 # Configuração da câmera
 CAM_SETUP = 'LEFT'
@@ -1251,7 +1257,7 @@ def process_monitor_fragment(
                 if len(person_keypoints) == 0:
                     continue
 
-                current_behavior = "Atento"
+                current_behavior = "Indeterminado"
                 have_all = False
                 pose_conf_threshold = _adaptive_keypoint_conf_threshold(person_keypoints)
 
@@ -1308,20 +1314,26 @@ def process_monitor_fragment(
                             current_behavior = new_behavior
 
                     raw_behavior = current_behavior
-                    state = sleep_smoother.setdefault(behavior_key, {"state":"Atento","sleep":0,"awake":0})
+                    state = sleep_smoother.setdefault(
+                        behavior_key,
+                        {"state": "Indeterminado", "candidate": None, "candidate_count": 0},
+                    )
 
-                    if raw_behavior == "Dormindo":
-                        state["sleep"] += 1
-                        state["awake"] = 0
-                        if state["state"] != "Dormindo" and state["sleep"] >= ENTER_SLEEP_FRAMES:
-                            state["state"] = "Dormindo"
+                    if raw_behavior == state["state"]:
+                        state["candidate"] = None
+                        state["candidate_count"] = 0
                     else:
-                        state["awake"] += 1
-                        state["sleep"] = 0
-                        if state["state"] == "Dormindo" and state["awake"] >= EXIT_SLEEP_FRAMES:
+                        if raw_behavior == state["candidate"]:
+                            state["candidate_count"] += 1
+                        else:
+                            state["candidate"] = raw_behavior
+                            state["candidate_count"] = 1
+
+                        required_frames = _transition_frames_required(state["state"], raw_behavior)
+                        if state["candidate_count"] >= required_frames:
                             state["state"] = raw_behavior
-                        elif state["state"] != "Dormindo":
-                            state["state"] = raw_behavior
+                            state["candidate"] = None
+                            state["candidate_count"] = 0
 
                     current_behavior = state["state"]
 
@@ -1758,56 +1770,133 @@ def check_distracted_status(name, is_distracted_pose, lateral_timers, timeout=10
         lateral_timers[name]["is_lateral"] = False
     return None
 
+def _point_distance(p1, p2) -> float:
+    return float(np.hypot(float(p1[0]) - float(p2[0]), float(p1[1]) - float(p2[1])))
+
+
+def _transition_frames_required(current_state: str, candidate_state: str) -> int:
+    if current_state == "Dormindo" and candidate_state != "Dormindo":
+        return EXIT_SLEEP_FRAMES
+
+    return {
+        "Dormindo": ENTER_SLEEP_FRAMES,
+        "Perguntando": ENTER_QUESTION_FRAMES,
+        "Atento": ENTER_ATTENTIVE_FRAMES,
+        "Agitado": ENTER_AGITATED_FRAMES,
+        "Distraido": ENTER_DISTRACTED_FRAMES,
+        "Indeterminado": ENTER_UNDETERMINED_FRAMES,
+    }.get(candidate_state, ENTER_UNDETERMINED_FRAMES)
+
+
 def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
     """
     0:nose | 5-6: ombros (ls, rs) | 7-8: cotovelos (le, re) | 9-10: punhos (lw, rw)
     """
     cx = (ls[0] + rs[0]) / 2.0
     cy = (ls[1] + rs[1]) / 2.0
-    s  = max(1.0, float(abs(ls[0] - rs[0])))   # escala ombro-a-ombro
+    s = max(1.0, float(abs(ls[0] - rs[0])))   # escala ombro-a-ombro
+    head_clearance = cy - nose[1]
+    head_offset_x = abs(nose[0] - cx)
+    shoulder_tilt = abs(ls[1] - rs[1])
 
-    # --- MÃOS ALTAS -> Perguntando/Agitado (robusto à distância) ---
-    shoulder_line = cy - 0.10 * s
-    up_L = (
-        lw[2] > threshold and le[2] > threshold and
-        lw[1] < nose[1] and lw[1] < shoulder_line and lw[1] < le[1]
-    )
-    up_R = (
-        rw[2] > threshold and re[2] > threshold and
-        rw[1] < nose[1] and rw[1] < shoulder_line and rw[1] < re[1]
-    )
-    if up_L and up_R:
-        return "Agitado" if abs(lw[0] - rw[0]) > 0.90 * s else "Perguntando"
-    if up_L or up_R:
-        return "Perguntando"
+    # "Cabeça baixa" bloqueia "Atento" e prioriza estados conservadores.
+    is_head_low = head_clearance < 0.16 * s or nose[1] > cy - 0.03 * s
+    is_looking_down = head_clearance < 0.10 * s or nose[1] > cy + 0.06 * s
 
-    # --- DORMINDO: cabeça baixa com apoio de braço/mão ---
+    left_hand_near_head = (
+        lw[2] > threshold and (
+            _point_distance(lw, nose) < 0.34 * s or
+            (abs(lw[0] - nose[0]) < 0.24 * s and abs(lw[1] - nose[1]) < 0.30 * s)
+        )
+    )
+    right_hand_near_head = (
+        rw[2] > threshold and (
+            _point_distance(rw, nose) < 0.34 * s or
+            (abs(rw[0] - nose[0]) < 0.24 * s and abs(rw[1] - nose[1]) < 0.30 * s)
+        )
+    )
+
+    # --- DORMINDO / CABEÇA BAIXA ---
+    # Quando a cabeça está baixa, preferimos não "promover" o aluno para Atento.
+    # Se houver apoio compatível com sono, marcamos Dormindo; caso contrário,
+    # devolvemos Distraido ou Indeterminado para reduzir falso positivo.
     MIN_S_FOR_SLEEP = 28.0
-    DY_COEF   = 0.14
-    DX_COEF   = 0.35 if s >= 50 else 0.55   # tolera cabeça de lado se estiver longe
-    ELB_NEAR  = 0.26
+    DY_COEF = 0.14
+    DX_COEF = 0.35 if s >= 50 else 0.55
+    ELB_NEAR = 0.26
     WRIST_ELBOW_X_NEAR = 0.38
     WRIST_ELBOW_Y_NEAR = 0.30
 
     dy = nose[1] - cy
     dx = abs(nose[0] - cx)
     best_elbow = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
-    hands_low  = (lw[1] > cy - 0.08 * s) and (rw[1] > cy - 0.08 * s)
+    hands_low = (lw[1] > cy - 0.08 * s) and (rw[1] > cy - 0.08 * s)
     elbows_low = (le[1] > cy - 0.12 * s) and (re[1] > cy - 0.12 * s)
     left_support = abs(lw[0] - le[0]) < WRIST_ELBOW_X_NEAR * s and abs(lw[1] - le[1]) < WRIST_ELBOW_Y_NEAR * s
     right_support = abs(rw[0] - re[0]) < WRIST_ELBOW_X_NEAR * s and abs(rw[1] - re[1]) < WRIST_ELBOW_Y_NEAR * s
     wrist_support = left_support or right_support
 
     if s >= MIN_S_FOR_SLEEP and hands_low and elbows_low:
-        head_low_ok   = (dy > DY_COEF * s) and (dx < DX_COEF * s)
+        head_low_ok = (dy > DY_COEF * s) and (dx < DX_COEF * s)
         elbow_near_ok = (best_elbow < ELB_NEAR * s) and (nose[1] > cy - 0.10 * s)
         if wrist_support and (head_low_ok or elbow_near_ok):
             return "Dormindo"
-        if head_low_ok:
+        if head_low_ok or is_looking_down:
             return "Distraido"
 
-    # --- fallback ---
-    return "Atento"
+    if is_looking_down:
+        return "Distraido"
+    if is_head_low:
+        return "Indeterminado"
+
+    # --- MÃOS ALTAS -> Perguntando/Agitado ---
+    # "Perguntando" agora exige mão realmente erguida, afastada da cabeça
+    # e depois ainda passa por persistência temporal para evitar falso positivo.
+    raised_margin = 0.22 * s
+    min_head_gap_x = 0.28 * s
+    elbow_margin = 0.04 * s
+    up_L = (
+        lw[2] > threshold and le[2] > threshold and
+        lw[1] < cy - raised_margin and
+        lw[1] < le[1] - elbow_margin and
+        abs(lw[0] - nose[0]) > min_head_gap_x and
+        not left_hand_near_head
+    )
+    up_R = (
+        rw[2] > threshold and re[2] > threshold and
+        rw[1] < cy - raised_margin and
+        rw[1] < re[1] - elbow_margin and
+        abs(rw[0] - nose[0]) > min_head_gap_x and
+        not right_hand_near_head
+    )
+    if up_L and up_R:
+        return "Agitado" if abs(lw[0] - rw[0]) > 0.95 * s else "Perguntando"
+    if up_L or up_R:
+        return "Perguntando"
+
+    # --- ATENTO ---
+    # "Atento" precisa ser conquistado: cabeça suficientemente acima dos ombros,
+    # sem sinal de cabeça baixa, sem mão apoiada no rosto e sem postura ambígua.
+    hands_compact_front = (
+        lw[2] > threshold and rw[2] > threshold and
+        abs(lw[0] - rw[0]) < 0.45 * s and
+        min(lw[1], rw[1]) > nose[1] and
+        max(lw[1], rw[1]) < cy + 0.45 * s
+    )
+    phone_like_posture = hands_compact_front and head_clearance < 0.28 * s
+    attentive_posture = (
+        head_clearance > 0.24 * s and
+        head_offset_x < 0.34 * s and
+        shoulder_tilt < max(16.0, 0.18 * s) and
+        not phone_like_posture and
+        not left_hand_near_head and
+        not right_hand_near_head
+    )
+    if attentive_posture:
+        return "Atento"
+
+    # Ambiguidade deixa de cair em "Atento" por padrão.
+    return "Indeterminado"
 
 
 def _adaptive_keypoint_conf_threshold(person_keypoints) -> float:
