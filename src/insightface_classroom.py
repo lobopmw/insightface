@@ -1,7 +1,9 @@
 
 import base64
 import html
+import io
 import os
+import glob
 from urllib.parse import quote
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
@@ -114,6 +116,88 @@ CAPTURE_POSE_LABELS = {
 }
 LESSON_TYPE_OPTIONS = ["Exposição", "Atividade", "Prova", "Revisão", "Outro"]
 USE_DIRECT_MONITOR_STREAM = False
+REGISTRATION_CAMERA_INDEX = int(os.getenv("CADASTRO_CAMERA_INDEX", os.getenv("CAMERA_INDEX", "0")))
+REGISTRATION_CAMERA_WIDTH = int(os.getenv("CADASTRO_CAMERA_WIDTH", "640"))
+REGISTRATION_CAMERA_HEIGHT = int(os.getenv("CADASTRO_CAMERA_HEIGHT", "480"))
+REGISTRATION_CAMERA_WARMUP_FRAMES = max(3, int(os.getenv("CADASTRO_CAMERA_WARMUP_FRAMES", "8")))
+
+
+def _release_registration_camera() -> None:
+    cap = st.session_state.get("cadastro_cap")
+    if cap is not None:
+        try:
+            cap.release()
+        except Exception:
+            pass
+    st.session_state.pop("cadastro_cap", None)
+    st.session_state.pop("cadastro_camera_error", None)
+    st.session_state.pop("cadastro_camera_index", None)
+    st.session_state.pop("cadastro_camera_backend", None)
+
+
+def _open_registration_camera():
+    candidate_indexes = []
+    preferred_indexes = [REGISTRATION_CAMERA_INDEX]
+    fallback_indexes = []
+
+    for device_path in sorted(glob.glob("/dev/video*")):
+        suffix = device_path.replace("/dev/video", "", 1)
+        if suffix.isdigit():
+            fallback_indexes.append(int(suffix))
+
+    for index in preferred_indexes + fallback_indexes + [0, 1, 2, 3]:
+        if index not in candidate_indexes:
+            candidate_indexes.append(index)
+
+    backend_candidates = []
+    if hasattr(cv2, "CAP_V4L2"):
+        backend_candidates.append(("V4L2", cv2.CAP_V4L2))
+    backend_candidates.append(("default", cv2.CAP_ANY))
+
+    tried = []
+    for camera_index in candidate_indexes:
+        for backend_name, backend in backend_candidates:
+            tried.append(f"indice {camera_index} ({backend_name})")
+            try:
+                cap = cv2.VideoCapture(camera_index, backend)
+            except Exception:
+                cap = None
+
+            if cap is None or not cap.isOpened():
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                continue
+
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, REGISTRATION_CAMERA_WIDTH)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, REGISTRATION_CAMERA_HEIGHT)
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+
+            for _ in range(REGISTRATION_CAMERA_WARMUP_FRAMES):
+                ok, frame = cap.read()
+                if ok and frame is not None and getattr(frame, "size", 0) > 0:
+                    st.session_state["cadastro_camera_index"] = camera_index
+                    st.session_state["cadastro_camera_backend"] = backend_name
+                    return cap, None
+                time.sleep(0.06)
+
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+    tried_msg = ", ".join(tried) if tried else f"indice {REGISTRATION_CAMERA_INDEX}"
+    return None, (
+        "Nao foi possivel abrir a webcam do cadastro. "
+        f"Tentativas: {tried_msg}. "
+        "Verifique se outra aplicacao esta usando a camera, se o container recebeu acesso a `/dev/video*`, "
+        "ou ajuste a variavel `CADASTRO_CAMERA_INDEX`."
+    )
 
 
 def _normalize_student_name(value: str) -> str:
@@ -147,6 +231,21 @@ def _validate_student_registration_fields(name: str, matricula: str) -> list[str
         errors.append("A matrícula deve ter pelo menos 3 dígitos.")
 
     return errors
+
+
+def _decode_browser_capture(uploaded_file):
+    if uploaded_file is None:
+        return None, None, None
+
+    image_bytes = uploaded_file.getvalue()
+    if not image_bytes:
+        return None, None, None
+
+    image_digest = hashlib.sha256(image_bytes).hexdigest()
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    frame_rgb = np.array(image)
+    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+    return frame_rgb, frame_bgr, image_digest
 
 
 def _inject_student_registration_styles() -> None:
@@ -2069,16 +2168,28 @@ def recognition_behavior():
             embedding_message = st.session_state.get("last_embedding_message", "")
 
             if ultimo_hash and embedding_status is None:
-                with st.spinner("Gerando embedding facial do aluno..."):
-                    success, message = generate_student_embedding(
-                        ultimo_hash,
-                        ultimo_nome,
-                        ultima_mat or None,
-                    )
+                progress_status = st.empty()
+                progress_bar = st.progress(0, text="Finalizando cadastro do aluno...")
+                progress_status.info("Preparando o registro do aluno e organizando as imagens capturadas.")
+                progress_bar.progress(20, text="Validando dados e preparando o processamento facial...")
+                progress_status.info("Gerando o embedding facial e registrando o aluno na base.")
+                progress_bar.progress(55, text="Gerando embedding facial do aluno...")
+                success, message = generate_student_embedding(
+                    ultimo_hash,
+                    ultimo_nome,
+                    ultima_mat or None,
+                )
+                progress_bar.progress(90, text="Atualizando dados do monitoramento...")
                 st.session_state["last_embedding_status"] = success
                 st.session_state["last_embedding_message"] = message
                 teardown_monitor_runtime()
                 st.session_state.pop("student_lookup", None)
+                if success:
+                    progress_status.success("Cadastro e processamento facial concluídos.")
+                    progress_bar.progress(100, text="Aluno registrado com sucesso.")
+                else:
+                    progress_status.error("O cadastro foi concluído, mas houve falha no processamento facial.")
+                    progress_bar.progress(100, text="Cadastro concluído com pendência no embedding.")
                 st.rerun()
 
             if ultimo_nome or ultima_mat:
@@ -2105,15 +2216,13 @@ def recognition_behavior():
                 st.rerun()
 
             if st.button("✅ Finalizar cadastro"):
-                if 'cadastro_cap' in st.session_state:
-                    try: st.session_state.cadastro_cap.release()
-                    except: pass
-                    del st.session_state['cadastro_cap']
+                _release_registration_camera()
 
                 for k in ["pose_index","img_index","cap_running","next_time","pose_done",
                           "registration_done","last_cad_nome","last_cad_matricula","last_cad_hash",
-                          "last_embedding_status","last_embedding_message"]:
+                          "last_embedding_status","last_embedding_message","last_browser_capture_digest"]:
                     st.session_state.pop(k, None)
+                st.session_state["student_registration_stage"] = "identify"
 
                 st.session_state.cad_nome = ""
                 st.session_state.cad_matricula = ""
@@ -2124,8 +2233,33 @@ def recognition_behavior():
 
         pose_index = max(0, min(pose_index, len(POSES) - 1))
         pose_atual = POSES[pose_index]
-        left_col, right_col = st.columns([1.05, 1.25], gap="large")
-        with left_col:
+        class_options = {
+            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+            for _, row in allowed_classes_df.iterrows()
+        }
+        class_option_ids = list(class_options.keys())
+        if "cad_class_id" not in st.session_state and class_option_ids:
+            st.session_state["cad_class_id"] = class_option_ids[0]
+        if st.session_state.get("cad_class_id") not in class_options:
+            st.session_state["cad_class_id"] = class_option_ids[0] if class_option_ids else None
+
+        nome_aluno = st.session_state.get("cad_nome", "")
+        matricula = st.session_state.get("cad_matricula", "")
+        nome_norm = _normalize_student_name(nome_aluno)
+        matr_norm = _normalize_student_registration(matricula)
+        registration_errors = _validate_student_registration_fields(nome_aluno, matricula) if nome_aluno or matricula else []
+        registration_ready = bool(nome_norm and matr_norm and not registration_errors and st.session_state.get("cad_class_id") is not None)
+
+        registration_stage = st.session_state.get("student_registration_stage", "identify")
+        if not registration_ready and registration_stage == "capture":
+            registration_stage = "identify"
+            st.session_state["student_registration_stage"] = registration_stage
+
+        start_btn = False
+        cancel_btn = False
+        next_btn = False
+
+        if registration_stage == "identify":
             with st.container(border=True):
                 _render_student_registration_card_header(
                     "👤",
@@ -2138,12 +2272,13 @@ def recognition_behavior():
                     "<div class='student-reg-info'>Selecione a turma e informe os dados do aluno para iniciar o cadastro.</div>",
                     unsafe_allow_html=True,
                 )
-                class_options = {
-                    int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-                    for _, row in allowed_classes_df.iterrows()
-                }
-                selected_class_label = st.selectbox("Turma", list(class_options.values()))
-                selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
+
+                st.selectbox(
+                    "Turma",
+                    class_option_ids,
+                    key="cad_class_id",
+                    format_func=lambda value: class_options.get(value, ""),
+                )
 
                 form_col1, form_col2 = st.columns(2, gap="large")
                 with form_col1:
@@ -2154,7 +2289,7 @@ def recognition_behavior():
                 nome_norm = _normalize_student_name(nome_aluno)
                 matr_norm = _normalize_student_registration(matricula)
                 registration_errors = _validate_student_registration_fields(nome_aluno, matricula) if nome_aluno or matricula else []
-                registration_ready = bool(nome_norm and matr_norm and not registration_errors)
+                registration_ready = bool(nome_norm and matr_norm and not registration_errors and st.session_state.get("cad_class_id") is not None)
 
                 if registration_errors:
                     for error in registration_errors:
@@ -2183,7 +2318,7 @@ def recognition_behavior():
                         "<div style='border-radius:14px; padding:0.9rem 1rem; margin-top:0.9rem; "
                         "background:linear-gradient(180deg, rgba(72,50,148,0.32) 0%, rgba(48,32,95,0.28) 100%); "
                         "border:1px solid rgba(121,94,255,0.14); color:#C9C3FF;'>"
-                        "<strong>Passo 1 de 2</strong><br/>Após preencher os dados, clique em <strong>Iniciar captura</strong> para começar."
+                        "<strong>Passo 1 de 2</strong><br/>Após preencher os dados, clique em <strong>Próximo</strong> para ir para a captura."
                         "</div>",
                         unsafe_allow_html=True,
                     )
@@ -2192,96 +2327,128 @@ def recognition_behavior():
                 else:
                     st.success("Dados validados. A captura já pode ser iniciada.")
 
-        with right_col:
-            with st.container(border=True):
-                _render_student_registration_card_header(
-                    "📷",
-                    "Controle da Captura",
-                    "Acompanhe a pose atual e avance ao concluir cada etapa.",
-                    "linear-gradient(180deg, #159957 0%, #0E7A46 100%)",
+                next_identification = st.button(
+                    "➡️ Próximo para Captura",
+                    disabled=not registration_ready,
+                    use_container_width=True,
                 )
-                progress_percent = int((img_index / max(IMAGENS_POR_POSE, 1)) * 100)
-                pose_label = CAPTURE_POSE_LABELS.get(pose_atual, pose_atual.replace("_", " ").title())
-                mini_col1, mini_col2 = st.columns(2, gap="large")
-                with mini_col1:
-                    st.markdown(
-                        f"<div class='student-reg-mini'><div class='student-reg-mini-label'>Pose atual</div>"
-                        f"<div class='student-reg-mini-value'>{html.escape(pose_label)}</div>"
-                        "<div class='student-reg-progress-track'><div class='student-reg-progress-fill' style='width:100%; "
-                        "background:linear-gradient(90deg, #1B9E5A 0%, #39C875 100%);'></div></div></div>",
-                        unsafe_allow_html=True,
-                    )
-                with mini_col2:
-                    st.markdown(
-                        f"<div class='student-reg-mini'><div class='student-reg-mini-label'>Progresso</div>"
-                        f"<div class='student-reg-mini-value'>{img_index} / {IMAGENS_POR_POSE} imagens</div>"
-                        f"<div class='student-reg-progress-track'><div class='student-reg-progress-fill' style='width:{progress_percent}%;'></div></div></div>",
-                        unsafe_allow_html=True,
-                    )
+                if next_identification:
+                    st.session_state["student_registration_stage"] = "capture"
+                    st.rerun()
+        else:
+            selected_class_id = st.session_state.get("cad_class_id")
+            capture_left_col, capture_right_col = st.columns([0.95, 1.35], gap="large")
 
-                st.markdown(
-                    f"<div class='student-reg-mini' style='margin-top:0.85rem;'><div class='student-reg-mini-label'>Etapa</div>"
-                    f"<div class='student-reg-mini-value'>Etapa {pose_index + 1} de {len(POSES)}</div></div>",
-                    unsafe_allow_html=True,
-                )
-                _render_capture_pose_list(pose_index, POSES)
-
-                if pose_done:
+            with capture_left_col:
+                with st.container(border=True):
+                    _render_student_registration_card_header(
+                        "📷",
+                        "Controle da Captura",
+                        "Acompanhe a pose atual e avance ao concluir cada etapa.",
+                        "linear-gradient(180deg, #159957 0%, #0E7A46 100%)",
+                    )
+                    _render_student_registration_stepper(2)
                     st.markdown(
-                        "<div class='student-reg-info' style='color:#83D9A1; border-color:rgba(39,194,110,0.16); "
-                        "background:linear-gradient(180deg, rgba(18,85,54,0.32) 0%, rgba(15,58,39,0.22) 100%);'>"
-                        "Pose concluída. Você já pode avançar para a próxima etapa."
-                        "</div>",
+                        f"<div class='student-reg-info'>Aluno: <strong>{html.escape(nome_norm)}</strong><br/>"
+                        f"Matrícula: <strong>{html.escape(matr_norm)}</strong><br/>"
+                        f"Turma: <strong>{html.escape(class_options.get(selected_class_id, ''))}</strong></div>",
                         unsafe_allow_html=True,
                     )
-                elif cap_running:
+                    if st.button("⬅️ Editar Identificação", use_container_width=True):
+                        st.session_state["student_registration_stage"] = "identify"
+                        st.rerun()
                     st.markdown(
                         "<div class='student-reg-info'>"
-                        "Captura em andamento. Aguarde a conclusão automática desta pose.<br/>"
-                        "Durante a coleta, faça pequenos movimentos para frente e para trás, varie levemente o ângulo "
-                        "e, se possível, pegue pequenas diferenças de iluminação sem sair da pose atual."
+                        "Ao concluir a ultima pose, o sistema finaliza o cadastro e registra o aluno automaticamente."
                         "</div>",
                         unsafe_allow_html=True,
                     )
-                elif registration_ready:
+
+                    progress_percent = int((img_index / max(IMAGENS_POR_POSE, 1)) * 100)
+                    pose_label = CAPTURE_POSE_LABELS.get(pose_atual, pose_atual.replace("_", " ").title())
+                    mini_col1, mini_col2 = st.columns(2, gap="large")
+                    with mini_col1:
+                        st.markdown(
+                            f"<div class='student-reg-mini'><div class='student-reg-mini-label'>Pose atual</div>"
+                            f"<div class='student-reg-mini-value'>{html.escape(pose_label)}</div>"
+                            "<div class='student-reg-progress-track'><div class='student-reg-progress-fill' style='width:100%; "
+                            "background:linear-gradient(90deg, #1B9E5A 0%, #39C875 100%);'></div></div></div>",
+                            unsafe_allow_html=True,
+                        )
+                    with mini_col2:
+                        st.markdown(
+                            f"<div class='student-reg-mini'><div class='student-reg-mini-label'>Progresso</div>"
+                            f"<div class='student-reg-mini-value'>{img_index} / {IMAGENS_POR_POSE} imagens</div>"
+                            f"<div class='student-reg-progress-track'><div class='student-reg-progress-fill' style='width:{progress_percent}%;'></div></div></div>",
+                            unsafe_allow_html=True,
+                        )
+
                     st.markdown(
-                        "<div class='student-reg-info'>Preenchimento validado. Você já pode iniciar a captura das poses.</div>",
+                        f"<div class='student-reg-mini' style='margin-top:0.85rem;'><div class='student-reg-mini-label'>Etapa</div>"
+                        f"<div class='student-reg-mini-value'>Etapa {pose_index + 1} de {len(POSES)}</div></div>",
                         unsafe_allow_html=True,
                     )
-                else:
+                    _render_capture_pose_list(pose_index, POSES)
+
+                    if pose_done:
+                        st.markdown(
+                            "<div class='student-reg-info' style='color:#83D9A1; border-color:rgba(39,194,110,0.16); "
+                            "background:linear-gradient(180deg, rgba(18,85,54,0.32) 0%, rgba(15,58,39,0.22) 100%);'>"
+                            "Pose concluída. Você já pode avançar para a próxima etapa."
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    elif cap_running:
+                        st.markdown(
+                            "<div class='student-reg-info'>"
+                            "Captura em andamento pelo navegador.<br/>"
+                            "Use a webcam do seu notebook para tirar cada foto da pose atual. "
+                            "Entre uma foto e outra, varie levemente o angulo, a distancia e a iluminacao."
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            "<div class='student-reg-info'>A webcam fica visível ao lado direito. Abra a câmera, ajuste a pose e então inicie a captura.</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    button_col1, button_col2, button_col3 = st.columns(3)
+                    with button_col1:
+                        start_btn = st.button(
+                            "▶️ Iniciar Captura",
+                            disabled=cap_running or pose_done,
+                            use_container_width=True,
+                        )
+                    with button_col2:
+                        cancel_btn = st.button(
+                            "⏹️ Cancelar",
+                            disabled=not cap_running,
+                            use_container_width=True,
+                        )
+                    with button_col3:
+                        next_btn = st.button(
+                            "➡️ Próximo",
+                            disabled=st.session_state.get("cap_running", False) or not st.session_state.get("pose_done", False),
+                            use_container_width=True,
+                        )
+
                     st.markdown(
-                        "<div class='student-reg-info'>Preencha os dados do aluno para habilitar a captura das poses.</div>",
+                        "<div class='student-reg-lock'>Inicie a captura quando a webcam estiver bem posicionada. Depois avance apenas quando a pose estiver concluída.</div>",
                         unsafe_allow_html=True,
                     )
 
-                button_col1, button_col2, button_col3 = st.columns(3)
-                with button_col1:
-                    start_btn = st.button(
-                        "▶️ Iniciar Captura",
-                        disabled=(not registration_ready) or cap_running or pose_done,
-                        use_container_width=True,
+            with capture_right_col:
+                with st.container(border=True):
+                    _render_student_registration_card_header(
+                        "📷",
+                        "Câmera de captura",
+                        "A webcam do navegador sera usada para capturar as imagens desta pose.",
+                        "linear-gradient(180deg, #5F49D6 0%, #4633A8 100%)",
                     )
-                with button_col2:
-                    cancel_btn = st.button(
-                        "⏹️ Cancelar",
-                        disabled=(not registration_ready) or (not cap_running),
-                        use_container_width=True,
-                    )
-                with button_col3:
-                    next_btn = st.button(
-                        "➡️ Próximo",
-                        disabled=(not registration_ready)
-                        or st.session_state.get("cap_running", False)
-                        or not st.session_state.get("pose_done", False),
-                        use_container_width=True,
-                    )
-
-                st.markdown(
-                    "<div class='student-reg-lock'>Os botões serão habilitados automaticamente após a validação dos dados.</div>",
-                    unsafe_allow_html=True,
-                )
 
         if registration_ready:
+            selected_class_id = st.session_state.get("cad_class_id")
             nome_criptografado = salvar_mapeamento(nome_norm, matr_norm)
             upsert_student(nome_criptografado, nome_norm, matr_norm, selected_class_id)
 
@@ -2308,48 +2475,19 @@ def recognition_behavior():
             df = df.drop_duplicates(subset=["nome", "matricula"], keep="first")
             df.to_csv(MAPPING_CSV, index=False)
 
-            with right_col:
-                if st.button("🔄 Atualizar embedding deste aluno", use_container_width=True):
-                    with st.spinner("Processando embedding facial do aluno..."):
-                        success, message = generate_student_embedding(
-                            nome_criptografado,
-                            nome_norm,
-                            matr_norm,
-                        )
-                    if success:
-                        st.success(message)
-                        teardown_monitor_runtime()
-                        st.session_state.pop("student_lookup", None)
-                    else:
-                        st.error(message)
-
-            # Preview
-            st.markdown("<div class='student-reg-camera-wrap'>", unsafe_allow_html=True)
-            with st.container(border=True):
-                _render_student_registration_card_header(
-                    "📷",
-                    "Câmera de captura",
-                    "A visualização da câmera é exibida abaixo durante a coleta das poses.",
-                    "linear-gradient(180deg, #5F49D6 0%, #4633A8 100%)",
-                )
-            stframe = st.empty()
-            if 'cadastro_cap' not in st.session_state:
-                st.session_state.cadastro_cap = cv2.VideoCapture(0)
-                st.session_state.cadastro_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                st.session_state.cadastro_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            cap = st.session_state.cadastro_cap
-
             if start_btn:
                 st.session_state.cap_running = True
-                st.session_state.pose_done   = False
-                st.session_state.img_index   = 0
-                st.session_state.next_time   = time.time() + prep_seconds
+                st.session_state.pose_done = False
+                st.session_state.img_index = 0
+                st.session_state.next_time = time.time() + prep_seconds
+                st.session_state.pop("last_browser_capture_digest", None)
                 cap_running = True
-                img_index   = 0
-                next_time   = st.session_state.next_time
+                img_index = 0
+                next_time = st.session_state.next_time
 
             if cancel_btn:
                 st.session_state.cap_running = False
+                st.session_state.pop("last_browser_capture_digest", None)
                 cap_running = False
 
             if next_btn and pose_done:
@@ -2358,6 +2496,8 @@ def recognition_behavior():
                     st.session_state.img_index   = 0
                     st.session_state.pose_done   = False
                     st.session_state.cap_running = False
+                    st.session_state.next_time   = None
+                    st.session_state.pop("last_browser_capture_digest", None)
                     st.rerun()
                 else:
                     st.session_state.registration_done = True
@@ -2369,86 +2509,80 @@ def recognition_behavior():
                     st.session_state.cap_running = False
                     st.session_state.pose_done   = False
                     st.session_state.next_time   = None
+                    st.session_state.pop("last_browser_capture_digest", None)
                     st.rerun()
 
-            if cap_running:
-                pasta_pose = os.path.join(pasta_base, pose_atual)
-                os.makedirs(pasta_pose, exist_ok=True)
-                while st.session_state.cap_running:
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.error("Não foi possível ler da câmera.")
-                        break
-                    now = time.time()
-                    restante = max(0.0, (st.session_state.next_time or now) - now)
-                    overlay = frame.copy()
-                    cv2.putText(overlay, f"Pose: {pose_atual.replace('_',' ').title()}",
-                                (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
-                    cv2.putText(overlay, f"Foto: {st.session_state.img_index}/{IMAGENS_POR_POSE}",
-                                (10, 52), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
-                    cv2.putText(overlay, f"Proxima em: {restante:0.1f}s",
-                                (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0), 2)
-                    stframe.image(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB), channels="RGB", width=900)
+            if registration_stage == "capture":
+                with capture_right_col:
+                    camera_widget_key = f"cadastro_browser_camera_{pose_index}_{img_index}_{int(cap_running)}"
+                    captured_image = st.camera_input(
+                        " ",
+                        disabled=not registration_ready,
+                        key=camera_widget_key,
+                        label_visibility="collapsed",
+                    )
 
-                    if now >= (st.session_state.next_time or now):
-                        timestamp    = get_local_now().strftime("%Y%m%d_%H%M%S%f")
-                        nome_arquivo = f"{pose_atual}_{timestamp}.jpg"
-                        caminho      = os.path.join(pasta_pose, nome_arquivo)
-                        cv2.imwrite(caminho, frame)
-                        st.session_state.img_index += 1
-                        st.session_state.next_time  = now + capture_interval
+                    if cap_running:
+                        pasta_pose = os.path.join(pasta_base, pose_atual)
+                        os.makedirs(pasta_pose, exist_ok=True)
+                        restante = max(0.0, (st.session_state.next_time or time.time()) - time.time())
 
-                        if st.session_state.img_index >= IMAGENS_POR_POSE:
-                            st.session_state.cap_running = False
-                            st.session_state.pose_done   = True
-                            st.session_state.next_time   = None
+                        if restante > 0.0:
+                            st.info(f"Prepare a pose. A captura manual sera liberada em {restante:0.1f}s.")
+                        else:
+                            st.success("Pose pronta. Tire uma foto pelo navegador para salvar a proxima imagem.")
 
-                            if pose_index == len(POSES) - 1:
-                                st.session_state.registration_done = True
-                                st.session_state.last_cad_nome = nome_norm
-                                st.session_state.last_cad_matricula = matr_norm
-                                st.session_state.last_cad_hash = nome_criptografado
-                                st.session_state.last_embedding_status = None
-                                st.session_state.last_embedding_message = ""
-                                st.rerun()
-                            else:
-                                st.success(
-                                    f"✅ {IMAGENS_POR_POSE} imagens capturadas para '{pose_atual}'. "
-                                    f"Clique em **Próximo** para a próxima pose."
-                                )
-                                st.rerun()
-                    time.sleep(0.02)
-            else:
-                ret, frame = cap.read()
-                if ret:
-                    stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width=900)
-            st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            with st.container(border=True):
-                _render_student_registration_card_header(
-                    "📷",
-                    "Câmera de captura",
-                    "A câmera será exibida aqui após a validação do cadastro.",
-                    "linear-gradient(180deg, #5F49D6 0%, #4633A8 100%)",
-                )
-                preview_placeholder = st.empty()
-                preview_placeholder.markdown(
-                    """
-                    <div class="student-reg-camera-placeholder">
-                        <div class="student-reg-camera-icon">📷</div>
-                        <div style="font-size:1.55rem; color:#E5E8F1; margin-bottom:0.45rem;">A visualização da câmera será exibida aqui</div>
-                        <div style="font-size:1rem; color:#A6AFBD;">A captura é liberada automaticamente após validar o nome e a matrícula.</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                        if captured_image is not None and restante <= 0.0:
+                            frame_rgb, frame_bgr, image_digest = _decode_browser_capture(captured_image)
+                            last_digest = st.session_state.get("last_browser_capture_digest")
 
+                            if frame_bgr is None:
+                                st.error("Nao foi possivel processar a foto enviada pela webcam do navegador.")
+                            elif image_digest != last_digest:
+                                timestamp = get_local_now().strftime("%Y%m%d_%H%M%S%f")
+                                nome_arquivo = f"{pose_atual}_{timestamp}.jpg"
+                                caminho = os.path.join(pasta_pose, nome_arquivo)
+                                cv2.imwrite(caminho, frame_bgr)
+                                st.session_state["last_browser_capture_digest"] = image_digest
+                                st.session_state.img_index += 1
+                                st.session_state.next_time = time.time() + capture_interval
+
+                                if frame_rgb is not None:
+                                    st.image(frame_rgb, channels="RGB", width=900)
+
+                                if st.session_state.img_index >= IMAGENS_POR_POSE:
+                                    st.session_state.cap_running = False
+                                    st.session_state.pose_done = True
+                                    st.session_state.next_time = None
+
+                                    if pose_index == len(POSES) - 1:
+                                        st.session_state.registration_done = True
+                                        st.session_state.last_cad_nome = nome_norm
+                                        st.session_state.last_cad_matricula = matr_norm
+                                        st.session_state.last_cad_hash = nome_criptografado
+                                        st.session_state.last_embedding_status = None
+                                        st.session_state.last_embedding_message = ""
+                                    else:
+                                        st.success(
+                                            f"✅ {IMAGENS_POR_POSE} imagens capturadas para '{pose_atual}'. "
+                                            f"Clique em **Próximo** para a próxima pose."
+                                        )
+                                    st.rerun()
+                            elif frame_rgb is not None:
+                                st.image(frame_rgb, channels="RGB", width=900)
+                                st.caption("Essa foto ja foi registrada nesta etapa. Tire uma nova imagem para continuar.")
+                    else:
+                        if captured_image is not None:
+                            frame_rgb, _, _ = _decode_browser_capture(captured_image)
+                            if frame_rgb is not None:
+                                st.image(frame_rgb, channels="RGB", width=900)
+                        if pose_done:
+                            st.success("Pose concluida. Clique em **Próximo** para seguir para a proxima etapa.")
+                        else:
+                            st.info("A webcam do navegador ja pode ser aberta acima. Clique em **Iniciar Captura** quando quiser começar a salvar as fotos desta pose.")
     # ------------------ MONITORAMENTO ------------------
     elif menu_option == "Monitoramento":
-        if 'cadastro_cap' in st.session_state:
-            try: st.session_state.cadastro_cap.release()
-            except: pass
-            del st.session_state['cadastro_cap']
+        _release_registration_camera()
 
         st.markdown(
             """

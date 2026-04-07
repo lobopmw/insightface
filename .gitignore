@@ -12,6 +12,9 @@ __pycache__/
 # Streamlit
 .streamlit/
 
+# Certificados locais
+certs/
+
 # Dados gerados
 # *.npy
 # *.pkl
@@ -33,5 +36,4 @@ Thumbs.db
 *.pt
 *.h5
 *.ckpt
-
 

@@ -35,11 +35,13 @@ services:
     ports:
       - "8501:8501"
     gpus: all
+    privileged: true
     networks:
       - insightface_network
     volumes:
       - .:/app
       - insightface_model_cache:/root/.insightface
+      - /dev:/dev
 
   relay:
     build: .
