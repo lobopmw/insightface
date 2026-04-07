@@ -43,6 +43,15 @@ def apply_login_styles():
     st.markdown(
         """
         <style>
+        .stApp [data-testid="stMainBlockContainer"] {
+            padding-top: 1.1rem;
+            padding-bottom: 1.5rem;
+        }
+
+        .stApp header[data-testid="stHeader"] {
+            background: transparent;
+        }
+
         div[data-testid="stForm"] {
             border: 1px solid rgba(255, 255, 255, 0.08) !important;
             background: linear-gradient(180deg, rgba(24, 27, 36, 0.96) 0%, rgba(17, 19, 27, 0.94) 100%);

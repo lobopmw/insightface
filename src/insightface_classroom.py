@@ -270,6 +270,11 @@ def _inject_student_registration_styles() -> None:
             border: 1px solid rgba(128,155,255,0.22);
             box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
         }
+        .student-reg-icon svg {
+            width: 38px;
+            height: 38px;
+            display: block;
+        }
         .student-reg-title {
             margin: 0;
             font-size: 2.05rem;
@@ -497,9 +502,9 @@ def _inject_student_registration_styles() -> None:
 
 def _render_student_registration_header() -> None:
     st.markdown(
-        """
+        f"""
         <div class="student-reg-header">
-            <div class="student-reg-icon">📸</div>
+            <div class="student-reg-icon">{_students_group_icon_svg()}</div>
             <div>
                 <h1 class="student-reg-title">Cadastro de Alunos</h1>
                 <p class="student-reg-subtitle">Preencha os dados do aluno e capture as poses para habilitar o monitoramento.</p>
@@ -561,8 +566,18 @@ def _render_capture_pose_list(pose_index: int, poses: list[str]) -> None:
 
 def _inject_sidebar_menu_styles() -> None:
     monitor_icon_data_uri = _svg_to_data_uri(_monitor_hero_icon_svg())
+    students_icon_data_uri = _svg_to_data_uri(_students_group_icon_svg())
+    charts_icon_data_uri = _svg_to_data_uri(_charts_menu_icon_svg())
+    reports_icon_data_uri = _svg_to_data_uri(_reports_menu_icon_svg())
     css = """
         <style>
+        .stApp [data-testid="stMainBlockContainer"] {
+            padding-top: 1rem;
+            padding-bottom: 1.4rem;
+        }
+        .stApp header[data-testid="stHeader"] {
+            background: transparent;
+        }
         [data-testid="stSidebar"] > div:first-child {
             background:
                 radial-gradient(circle at top left, rgba(78, 92, 140, 0.20), transparent 28%),
@@ -697,17 +712,62 @@ def _inject_sidebar_menu_styles() -> None:
             font-size: 1rem;
             position: relative;
         }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(1) p {
+            padding-left: 2.2rem;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(1) p::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0.02rem;
+            width: 1.6rem;
+            height: 1.6rem;
+            background-image: url("__STUDENTS_ICON_DATA_URI__");
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-position: center;
+        }
         [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(2) p {
-            padding-left: 1.9rem;
+            padding-left: 2.2rem;
         }
         [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(2) p::before {
             content: "";
             position: absolute;
             left: 0;
             top: 0.02rem;
-            width: 1.35rem;
-            height: 1.35rem;
+            width: 1.6rem;
+            height: 1.6rem;
             background-image: url("__MONITOR_ICON_DATA_URI__");
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-position: center;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(3) p {
+            padding-left: 2.2rem;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(3) p::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0.02rem;
+            width: 1.6rem;
+            height: 1.6rem;
+            background-image: url("__CHARTS_ICON_DATA_URI__");
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-position: center;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(4) p {
+            padding-left: 2.2rem;
+        }
+        [data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(4) p::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0.02rem;
+            width: 1.6rem;
+            height: 1.6rem;
+            background-image: url("__REPORTS_ICON_DATA_URI__");
             background-repeat: no-repeat;
             background-size: contain;
             background-position: center;
@@ -779,7 +839,13 @@ def _inject_sidebar_menu_styles() -> None:
         }
         </style>
     """
-    st.markdown(css.replace("__MONITOR_ICON_DATA_URI__", monitor_icon_data_uri), unsafe_allow_html=True)
+    st.markdown(
+        css.replace("__MONITOR_ICON_DATA_URI__", monitor_icon_data_uri)
+        .replace("__STUDENTS_ICON_DATA_URI__", students_icon_data_uri)
+        .replace("__CHARTS_ICON_DATA_URI__", charts_icon_data_uri)
+        .replace("__REPORTS_ICON_DATA_URI__", reports_icon_data_uri),
+        unsafe_allow_html=True,
+    )
 
 
 def img_to_base64(path: str) -> str:
@@ -960,6 +1026,53 @@ def _security_camera_icon_svg() -> str:
         <path d="M46.8 21L51.6 18.2" stroke="#B9C6DD" stroke-width="2.6" stroke-linecap="round"/>
         <path d="M44.8 25.2H50.8" stroke="#B9C6DD" stroke-width="2.6" stroke-linecap="round"/>
         <path d="M46.8 29.4L51.6 32.2" stroke="#B9C6DD" stroke-width="2.6" stroke-linecap="round"/>
+    </svg>
+    """
+
+
+def _students_group_icon_svg() -> str:
+    return """
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M9 17L24 13L39 17L24 21L9 17Z" stroke="#F4F7FF" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M17 21V30.5C17 31.8 16.4 33 15.4 33.9L14.9 34.4C14.1 35.1 13.7 36.1 13.7 37.1V40.5C13.7 46.8 18.7 51.8 25 51.8C31.3 51.8 36.3 46.8 36.3 40.5V37.1C36.3 36.1 35.9 35.1 35.1 34.4L34.6 33.9C33.6 33 33 31.8 33 30.5V21" stroke="#F4F7FF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M17 24.5C19.4 26.1 22 26.9 24.8 26.9C27.7 26.9 30.5 26.1 33 24.4" stroke="#F4F7FF" stroke-width="3.2" stroke-linecap="round"/>
+        <path d="M12 62V59.6C12 54.2 16.4 49.8 21.8 49.8H28.2C33.6 49.8 38 54.2 38 59.6V62" stroke="#F4F7FF" stroke-width="3.2" stroke-linecap="round"/>
+        <path d="M31.5 17L46.5 13.8L58.5 17L43.5 20.2L31.5 17Z" stroke="#A9D7FF" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M41 20.2V29.2C41 30.3 41.4 31.3 42.1 32.1L42.9 33C43.5 33.7 43.9 34.6 44 35.5C44.3 39.9 45.6 43 47.8 45.1C45.8 47 43.3 48.1 40.6 48.1C34.4 48.1 29.4 43.1 29.4 36.9V33.9C29.4 33 29.7 32.2 30.3 31.6L31 30.8C31.7 30 32.1 29 32.1 27.9V20.4" stroke="#A9D7FF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M32.6 23.8C34.9 25.1 37.1 25.8 39.4 25.8C42 25.8 44.5 25 47 23.5" stroke="#A9D7FF" stroke-width="3.2" stroke-linecap="round"/>
+        <path d="M51.5 18.6V30.6" stroke="#A9D7FF" stroke-width="3.2" stroke-linecap="round"/>
+        <path d="M51.5 30.6L49.8 35H53.2L51.5 30.6Z" stroke="#A9D7FF" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M33.5 62V59.7C33.5 55.2 37.2 51.5 41.7 51.5H47.1C51.6 51.5 55.3 55.2 55.3 59.7V62" stroke="#A9D7FF" stroke-width="3.2" stroke-linecap="round"/>
+    </svg>
+    """
+
+
+def _charts_menu_icon_svg() -> str:
+    return """
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="12" y="10" width="40" height="44" rx="8" fill="#EEF3FF" fill-opacity="0.96"/>
+        <path d="M21 22V45" stroke="#28324D" stroke-width="3" stroke-linecap="round"/>
+        <path d="M21 45H45" stroke="#28324D" stroke-width="3" stroke-linecap="round"/>
+        <rect x="24.5" y="31" width="5.8" height="14" rx="1.5" fill="#52A7FF"/>
+        <rect x="33" y="25" width="5.8" height="20" rx="1.5" fill="#7DDB78"/>
+        <rect x="41.5" y="18" width="5.8" height="27" rx="1.5" fill="#F0B54D"/>
+        <path d="M18 15.5H46" stroke="#BCC9E0" stroke-width="2.4" stroke-linecap="round"/>
+    </svg>
+    """
+
+
+def _reports_menu_icon_svg() -> str:
+    return """
+    <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M18 10H39L48 19V50C48 52.2 46.2 54 44 54H18C15.8 54 14 52.2 14 50V14C14 11.8 15.8 10 18 10Z" fill="#EEF3FF" fill-opacity="0.96"/>
+        <path d="M39 10V18C39 19.7 40.3 21 42 21H48" fill="#D9E4F7"/>
+        <path d="M39 10V18C39 19.7 40.3 21 42 21H48" stroke="#B6C5DE" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M22 24H39" stroke="#2C3653" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M22 31H39" stroke="#2C3653" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M22 38H34" stroke="#2C3653" stroke-width="2.6" stroke-linecap="round"/>
+        <circle cx="43.5" cy="28.5" r="2.2" fill="#52A7FF"/>
+        <circle cx="43.5" cy="35.5" r="2.2" fill="#7DDB78"/>
+        <circle cx="43.5" cy="42.5" r="2.2" fill="#F0B54D"/>
     </svg>
     """
 
@@ -2035,10 +2148,10 @@ def recognition_behavior():
     admin_menu = ["Usuários", "Gráficos", "Relatórios"]
     raw_menu_options = admin_menu if user_role == "admin" else teacher_menu
     menu_labels = {
-        "Cadastro de Alunos": "🧑‍🎓    Cadastro de Alunos\nGerencie alunos e cadastros",
+        "Cadastro de Alunos": "Cadastro de Alunos\nGerencie alunos e cadastros",
         "Monitoramento": "Monitoramento\nAcompanhe as sessões em tempo real",
-        "Gráficos": "📈    Gráficos\nVisualize dados e estatísticas",
-        "Relatórios": "🗂️    Relatórios\nAcesse análises e relatórios observacionais",
+        "Gráficos": "Gráficos\nVisualize dados e estatísticas",
+        "Relatórios": "Relatórios\nAcesse análises e relatórios observacionais",
         "Usuários": "🛠️    Usuários\nGerencie contas e manutenção do sistema",
     }
     menu_display_options = [menu_labels[option] for option in raw_menu_options]
