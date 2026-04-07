@@ -26,4 +26,5 @@ pgvector
 # Additional
 streamlit-option-menu
 streamlit-cookies-controller
+streamlit-webrtc
 python-dotenv

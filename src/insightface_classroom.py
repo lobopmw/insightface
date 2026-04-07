@@ -53,6 +53,16 @@ from behavior_episode_service import BehaviorEpisodeManager
 from ui.admin_user_page import render_admin_user_page
 from ui.report_page import render_report_page
 
+try:
+    import av
+    from streamlit_webrtc import WebRtcMode, webrtc_streamer
+    WEBRTC_IMPORT_ERROR = None
+except Exception as exc:
+    av = None
+    WebRtcMode = None
+    webrtc_streamer = None
+    WEBRTC_IMPORT_ERROR = exc
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Suavização local dos comportamentos.
@@ -246,6 +256,26 @@ def _decode_browser_capture(uploaded_file):
     frame_rgb = np.array(image)
     frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
     return frame_rgb, frame_bgr, image_digest
+
+
+class StudentRegistrationVideoProcessor:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._latest_frame_bgr = None
+
+    def recv(self, frame):
+        if av is None:
+            return frame
+        img = frame.to_ndarray(format="bgr24")
+        with self._lock:
+            self._latest_frame_bgr = img.copy()
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+    def get_latest_frame_bgr(self):
+        with self._lock:
+            if self._latest_frame_bgr is None:
+                return None
+            return self._latest_frame_bgr.copy()
 
 
 def _inject_student_registration_styles() -> None:
@@ -2336,6 +2366,9 @@ def recognition_behavior():
                           "last_embedding_status","last_embedding_message","last_browser_capture_digest"]:
                     st.session_state.pop(k, None)
                 st.session_state["student_registration_stage"] = "identify"
+                st.session_state.pop("cad_nome_locked", None)
+                st.session_state.pop("cad_matricula_locked", None)
+                st.session_state.pop("cad_class_id_locked", None)
 
                 st.session_state.cad_nome = ""
                 st.session_state.cad_matricula = ""
@@ -2358,12 +2391,22 @@ def recognition_behavior():
 
         nome_aluno = st.session_state.get("cad_nome", "")
         matricula = st.session_state.get("cad_matricula", "")
+        locked_nome = st.session_state.get("cad_nome_locked", "")
+        locked_matricula = st.session_state.get("cad_matricula_locked", "")
+        locked_class_id = st.session_state.get("cad_class_id_locked")
         nome_norm = _normalize_student_name(nome_aluno)
         matr_norm = _normalize_student_registration(matricula)
         registration_errors = _validate_student_registration_fields(nome_aluno, matricula) if nome_aluno or matricula else []
         registration_ready = bool(nome_norm and matr_norm and not registration_errors and st.session_state.get("cad_class_id") is not None)
 
         registration_stage = st.session_state.get("student_registration_stage", "identify")
+        if registration_stage == "capture" and locked_nome and locked_matricula and locked_class_id is not None:
+            nome_aluno = locked_nome
+            matricula = locked_matricula
+            nome_norm = _normalize_student_name(locked_nome)
+            matr_norm = _normalize_student_registration(locked_matricula)
+            registration_errors = _validate_student_registration_fields(locked_nome, locked_matricula)
+            registration_ready = bool(nome_norm and matr_norm and not registration_errors and locked_class_id in class_options)
         if not registration_ready and registration_stage == "capture":
             registration_stage = "identify"
             st.session_state["student_registration_stage"] = registration_stage
@@ -2446,10 +2489,13 @@ def recognition_behavior():
                     use_container_width=True,
                 )
                 if next_identification:
+                    st.session_state["cad_nome_locked"] = nome_aluno
+                    st.session_state["cad_matricula_locked"] = matricula
+                    st.session_state["cad_class_id_locked"] = st.session_state.get("cad_class_id")
                     st.session_state["student_registration_stage"] = "capture"
                     st.rerun()
         else:
-            selected_class_id = st.session_state.get("cad_class_id")
+            selected_class_id = st.session_state.get("cad_class_id_locked", st.session_state.get("cad_class_id"))
             capture_left_col, capture_right_col = st.columns([0.95, 1.35], gap="large")
 
             with capture_left_col:
@@ -2468,6 +2514,10 @@ def recognition_behavior():
                         unsafe_allow_html=True,
                     )
                     if st.button("⬅️ Editar Identificação", use_container_width=True):
+                        st.session_state["cad_nome"] = st.session_state.get("cad_nome_locked", st.session_state.get("cad_nome", ""))
+                        st.session_state["cad_matricula"] = st.session_state.get("cad_matricula_locked", st.session_state.get("cad_matricula", ""))
+                        if st.session_state.get("cad_class_id_locked") is not None:
+                            st.session_state["cad_class_id"] = st.session_state.get("cad_class_id_locked")
                         st.session_state["student_registration_stage"] = "identify"
                         st.rerun()
                     st.markdown(
@@ -2593,14 +2643,13 @@ def recognition_behavior():
                 st.session_state.pose_done = False
                 st.session_state.img_index = 0
                 st.session_state.next_time = time.time() + prep_seconds
-                st.session_state.pop("last_browser_capture_digest", None)
                 cap_running = True
                 img_index = 0
                 next_time = st.session_state.next_time
 
             if cancel_btn:
                 st.session_state.cap_running = False
-                st.session_state.pop("last_browser_capture_digest", None)
+                st.session_state.next_time = None
                 cap_running = False
 
             if next_btn and pose_done:
@@ -2610,7 +2659,6 @@ def recognition_behavior():
                     st.session_state.pose_done   = False
                     st.session_state.cap_running = False
                     st.session_state.next_time   = None
-                    st.session_state.pop("last_browser_capture_digest", None)
                     st.rerun()
                 else:
                     st.session_state.registration_done = True
@@ -2622,46 +2670,71 @@ def recognition_behavior():
                     st.session_state.cap_running = False
                     st.session_state.pose_done   = False
                     st.session_state.next_time   = None
-                    st.session_state.pop("last_browser_capture_digest", None)
                     st.rerun()
 
             if registration_stage == "capture":
                 with capture_right_col:
-                    camera_widget_key = f"cadastro_browser_camera_{pose_index}_{img_index}_{int(cap_running)}"
-                    captured_image = st.camera_input(
-                        " ",
-                        disabled=not registration_ready,
-                        key=camera_widget_key,
-                        label_visibility="collapsed",
-                    )
+                    if webrtc_streamer is None or WebRtcMode is None or av is None:
+                        st.error(
+                            "A captura automática via WebRTC ainda não está disponível neste ambiente. "
+                            "Reconstrua o app para instalar `streamlit-webrtc`."
+                        )
+                        if WEBRTC_IMPORT_ERROR is not None:
+                            st.caption(f"Detalhe técnico: {WEBRTC_IMPORT_ERROR}")
+                        webrtc_ctx = None
+                        processor = None
+                        camera_ready = False
+                    else:
+                        webrtc_ctx = webrtc_streamer(
+                            key="cadastro_webrtc_stream",
+                            mode=WebRtcMode.SENDRECV,
+                            rtc_configuration={
+                                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+                            },
+                            media_stream_constraints={
+                                "video": {
+                                    "width": {"ideal": 1280},
+                                    "height": {"ideal": 720},
+                                    "facingMode": "user",
+                                },
+                                "audio": False,
+                            },
+                            video_processor_factory=StudentRegistrationVideoProcessor,
+                            async_processing=True,
+                        )
+                        processor = webrtc_ctx.video_processor if webrtc_ctx else None
+                        camera_ready = bool(webrtc_ctx and webrtc_ctx.state.playing and processor is not None)
+
+                    if start_btn and not camera_ready:
+                        st.session_state.cap_running = False
+                        st.session_state.next_time = None
+                        cap_running = False
+                        st.warning("Abra a webcam pelo controle START acima antes de iniciar a captura automática.")
 
                     if cap_running:
                         pasta_pose = os.path.join(pasta_base, pose_atual)
                         os.makedirs(pasta_pose, exist_ok=True)
-                        restante = max(0.0, (st.session_state.next_time or time.time()) - time.time())
-
-                        if restante > 0.0:
-                            st.info(f"Prepare a pose. A captura manual sera liberada em {restante:0.1f}s.")
+                        if not camera_ready:
+                            st.session_state.cap_running = False
+                            st.session_state.next_time = None
+                            st.warning("A webcam foi interrompida. Clique em START acima para reabrir o vídeo e depois inicie a captura novamente.")
                         else:
-                            st.success("Pose pronta. Tire uma foto pelo navegador para salvar a proxima imagem.")
-
-                        if captured_image is not None and restante <= 0.0:
-                            frame_rgb, frame_bgr, image_digest = _decode_browser_capture(captured_image)
-                            last_digest = st.session_state.get("last_browser_capture_digest")
+                            frame_bgr = processor.get_latest_frame_bgr()
+                            now = time.time()
+                            restante = max(0.0, (st.session_state.next_time or now) - now)
 
                             if frame_bgr is None:
-                                st.error("Nao foi possivel processar a foto enviada pela webcam do navegador.")
-                            elif image_digest != last_digest:
+                                st.info("Aguardando os primeiros frames da webcam...")
+                            elif restante > 0.0:
+                                st.info(f"Prepare a pose. A próxima captura automática será feita em {restante:0.1f}s.")
+                            else:
                                 timestamp = get_local_now().strftime("%Y%m%d_%H%M%S%f")
                                 nome_arquivo = f"{pose_atual}_{timestamp}.jpg"
                                 caminho = os.path.join(pasta_pose, nome_arquivo)
                                 cv2.imwrite(caminho, frame_bgr)
-                                st.session_state["last_browser_capture_digest"] = image_digest
                                 st.session_state.img_index += 1
-                                st.session_state.next_time = time.time() + capture_interval
-
-                                if frame_rgb is not None:
-                                    st.image(frame_rgb, channels="RGB", width=900)
+                                st.session_state.next_time = now + capture_interval
+                                st.success(f"Imagem {st.session_state.img_index} de {IMAGENS_POR_POSE} capturada automaticamente.")
 
                                 if st.session_state.img_index >= IMAGENS_POR_POSE:
                                     st.session_state.cap_running = False
@@ -2681,18 +2754,17 @@ def recognition_behavior():
                                             f"Clique em **Próximo** para a próxima pose."
                                         )
                                     st.rerun()
-                            elif frame_rgb is not None:
-                                st.image(frame_rgb, channels="RGB", width=900)
-                                st.caption("Essa foto ja foi registrada nesta etapa. Tire uma nova imagem para continuar.")
+
+                            if st.session_state.get("cap_running", False):
+                                time.sleep(0.18)
+                                st.rerun()
                     else:
-                        if captured_image is not None:
-                            frame_rgb, _, _ = _decode_browser_capture(captured_image)
-                            if frame_rgb is not None:
-                                st.image(frame_rgb, channels="RGB", width=900)
                         if pose_done:
                             st.success("Pose concluida. Clique em **Próximo** para seguir para a proxima etapa.")
+                        elif camera_ready:
+                            st.info("Webcam pronta. Clique em **Iniciar Captura** para começar a captura automática por intervalo.")
                         else:
-                            st.info("A webcam do navegador ja pode ser aberta acima. Clique em **Iniciar Captura** quando quiser começar a salvar as fotos desta pose.")
+                            st.info("Clique em START acima para abrir a webcam do notebook. Depois use **Iniciar Captura** para começar a coleta automática.")
     # ------------------ MONITORAMENTO ------------------
     elif menu_option == "Monitoramento":
         _release_registration_camera()
