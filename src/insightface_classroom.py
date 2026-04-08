@@ -31,6 +31,7 @@ from control_database_postgres import (
     create_monitoring_session,
     get_local_now,
     get_monitoring_session_summary,
+    get_next_student_registration,
     get_student_lookup_for_scope,
     insert_behavior_episode,
     list_classes_for_user,
@@ -97,6 +98,7 @@ image_path_faces     = os.path.abspath(os.path.join(os.path.dirname(__file__), "
 image_path_cam       = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/cam_IA.png"))
 image_path_table     = os.path.abspath(os.path.join(os.path.dirname(__file__), "../images/table.png"))
 AUTH_COOKIE_NAME = "auth_user_cpf"
+AUTH_QUERY_TOKEN_KEY = "auth_token"
 LEGACY_AUTH_QUERY_KEYS = ("authenticated", "cpf", "city", "state", "name", "role")
 AUTH_RESTORE_BLOCK_KEY = "auth_restore_blocked"
 AUTH_BOOTSTRAP_KEY = "auth_bootstrap_checked"
@@ -218,7 +220,7 @@ def _normalize_student_registration(value: str) -> str:
     return "".join((value or "").strip().split())
 
 
-def _validate_student_registration_fields(name: str, matricula: str) -> list[str]:
+def _validate_student_registration_fields(name: str, matricula: str, require_matricula: bool = True) -> list[str]:
     errors = []
     normalized_name = _normalize_student_name(name)
     normalized_matricula = _normalize_student_registration(matricula)
@@ -233,14 +235,20 @@ def _validate_student_registration_fields(name: str, matricula: str) -> list[str
     if digit_count_name > 0 and letter_count <= digit_count_name:
         errors.append("O campo nome parece conter uma matrícula. Revise os campos antes de continuar.")
 
+    if not require_matricula:
+        return errors
+
     if not normalized_matricula:
         errors.append("Informe a matrícula do aluno.")
-    elif not normalized_matricula.isdigit():
-        errors.append("O campo matrícula deve conter apenas números.")
     elif len(normalized_matricula) < 3:
-        errors.append("A matrícula deve ter pelo menos 3 dígitos.")
+        errors.append("A matrícula deve ter pelo menos 3 caracteres.")
 
     return errors
+
+
+def _format_student_option(student_row: dict) -> str:
+    name = _normalize_student_name(student_row.get("name", ""))
+    return name or "Aluno sem nome"
 
 
 def _decode_browser_capture(uploaded_file):
@@ -2241,6 +2249,8 @@ def recognition_behavior():
         for key in LEGACY_AUTH_QUERY_KEYS:
             if key in st.query_params:
                 del st.query_params[key]
+        if AUTH_QUERY_TOKEN_KEY in st.query_params:
+            del st.query_params[AUTH_QUERY_TOKEN_KEY]
         for key in (
             "monitoring_state",
             "last_closed_monitoring_session",
@@ -2389,14 +2399,55 @@ def recognition_behavior():
         if st.session_state.get("cad_class_id") not in class_options:
             st.session_state["cad_class_id"] = class_option_ids[0] if class_option_ids else None
 
+        selected_class_id_for_students = st.session_state.get("cad_class_id")
+        selected_class_students_df = list_students_for_user(user_context, selected_class_id_for_students)
+        selected_class_students = selected_class_students_df.to_dict(orient="records")
+        existing_student_options = {
+            str(row["id"]): _format_student_option(row)
+            for row in selected_class_students
+        }
+        existing_student_ids = list(existing_student_options.keys())
+        if "cad_student_mode" not in st.session_state:
+            st.session_state["cad_student_mode"] = "existing" if existing_student_ids else "new"
+        if st.session_state.get("cad_student_mode") == "existing" and not existing_student_ids:
+            st.session_state["cad_student_mode"] = "new"
+        if st.session_state.get("cad_existing_student_id") not in existing_student_options:
+            st.session_state["cad_existing_student_id"] = existing_student_ids[0] if existing_student_ids else None
+        current_selected_existing_student = next(
+            (
+                row
+                for row in selected_class_students
+                if str(row["id"]) == str(st.session_state.get("cad_existing_student_id"))
+            ),
+            None,
+        )
+        generated_matricula = get_next_student_registration()
+
         nome_aluno = st.session_state.get("cad_nome", "")
         matricula = st.session_state.get("cad_matricula", "")
         locked_nome = st.session_state.get("cad_nome_locked", "")
         locked_matricula = st.session_state.get("cad_matricula_locked", "")
         locked_class_id = st.session_state.get("cad_class_id_locked")
+        locked_student_mode = st.session_state.get("cad_student_mode_locked")
+        locked_existing_student_id = st.session_state.get("cad_existing_student_id_locked")
         nome_norm = _normalize_student_name(nome_aluno)
         matr_norm = _normalize_student_registration(matricula)
-        registration_errors = _validate_student_registration_fields(nome_aluno, matricula) if nome_aluno or matricula else []
+        should_validate_registration = not (
+            st.session_state.get("cad_student_mode") == "existing" and current_selected_existing_student is not None
+        )
+        registration_errors = (
+            _validate_student_registration_fields(
+                nome_aluno,
+                matricula,
+                require_matricula=st.session_state.get("cad_student_mode") != "new",
+            )
+            if should_validate_registration and (
+                bool(nome_aluno)
+                if st.session_state.get("cad_student_mode") == "new"
+                else bool(nome_aluno or matricula)
+            )
+            else []
+        )
         registration_ready = bool(nome_norm and matr_norm and not registration_errors and st.session_state.get("cad_class_id") is not None)
 
         registration_stage = st.session_state.get("student_registration_stage", "identify")
@@ -2405,7 +2456,11 @@ def recognition_behavior():
             matricula = locked_matricula
             nome_norm = _normalize_student_name(locked_nome)
             matr_norm = _normalize_student_registration(locked_matricula)
-            registration_errors = _validate_student_registration_fields(locked_nome, locked_matricula)
+            registration_errors = (
+                []
+                if locked_student_mode == "existing"
+                else _validate_student_registration_fields(locked_nome, locked_matricula)
+            )
             registration_ready = bool(nome_norm and matr_norm and not registration_errors and locked_class_id in class_options)
         if not registration_ready and registration_stage == "capture":
             registration_stage = "identify"
@@ -2418,10 +2473,10 @@ def recognition_behavior():
         if registration_stage == "identify":
             with st.container(border=True):
                 _render_student_registration_card_header(
-                    "👤",
+                    "👥",
                     "Dados do Aluno",
                     "Preencha os dados principais para iniciar o cadastro.",
-                    "linear-gradient(180deg, #4BA3FF 0%, #1F73D8 100%)",
+                    "linear-gradient(180deg, #FFFFFF 0%, #EAF4FF 55%, #D7E9FF 100%)",
                 )
                 _render_student_registration_stepper(1)
                 st.markdown(
@@ -2436,40 +2491,121 @@ def recognition_behavior():
                     format_func=lambda value: class_options.get(value, ""),
                 )
 
+                selected_class_id_for_students = st.session_state.get("cad_class_id")
+                selected_class_students_df = list_students_for_user(user_context, selected_class_id_for_students)
+                selected_class_students = selected_class_students_df.to_dict(orient="records")
+                existing_student_options = {
+                    str(row["id"]): _format_student_option(row)
+                    for row in selected_class_students
+                }
+                existing_student_ids = list(existing_student_options.keys())
+                if st.session_state.get("cad_student_mode") == "existing" and not existing_student_ids:
+                    st.session_state["cad_student_mode"] = "new"
+                if st.session_state.get("cad_existing_student_id") not in existing_student_options:
+                    st.session_state["cad_existing_student_id"] = existing_student_ids[0] if existing_student_ids else None
+
+                st.radio(
+                    "Como deseja identificar o aluno?",
+                    options=["existing", "new"],
+                    key="cad_student_mode",
+                    horizontal=True,
+                    format_func=lambda value: "Aluno já cadastrado" if value == "existing" else "Aluno novo",
+                    disabled=not existing_student_ids,
+                )
+
+                previous_student_mode = st.session_state.get("cad_student_mode_previous")
+                current_student_mode = st.session_state.get("cad_student_mode")
+                if previous_student_mode != current_student_mode:
+                    if current_student_mode == "new":
+                        st.session_state["cad_nome"] = ""
+                        st.session_state["cad_matricula"] = generated_matricula
+                    elif current_student_mode == "existing" and existing_student_ids:
+                        selected_existing_student = next(
+                            (
+                                row
+                                for row in selected_class_students
+                                if str(row["id"]) == str(st.session_state.get("cad_existing_student_id"))
+                            ),
+                            None,
+                        )
+                        if selected_existing_student:
+                            st.session_state["cad_nome"] = _normalize_student_name(selected_existing_student.get("name", ""))
+                            st.session_state["cad_matricula"] = _normalize_student_registration(
+                                selected_existing_student.get("matricula", "")
+                            )
+                    st.session_state["cad_student_mode_previous"] = current_student_mode
+                elif current_student_mode == "new" and not st.session_state.get("cad_matricula"):
+                    st.session_state["cad_matricula"] = generated_matricula
+
+                if selected_class_students_df.empty:
+                    st.info("Nenhum aluno cadastrado nesta turma ainda. Cadastre um aluno novo para continuar.")
+
+                selected_existing_student = None
+                if st.session_state.get("cad_student_mode") == "existing" and existing_student_ids:
+                    st.selectbox(
+                        "Selecione o aluno",
+                        options=existing_student_ids,
+                        key="cad_existing_student_id",
+                        format_func=lambda value: existing_student_options.get(value, ""),
+                    )
+                    selected_existing_student = next(
+                        (
+                            row
+                            for row in selected_class_students
+                            if str(row["id"]) == str(st.session_state.get("cad_existing_student_id"))
+                        ),
+                        None,
+                    )
+                    if selected_existing_student:
+                        st.session_state["cad_nome"] = _normalize_student_name(selected_existing_student.get("name", ""))
+                        st.session_state["cad_matricula"] = _normalize_student_registration(
+                            selected_existing_student.get("matricula", "")
+                        )
+
                 form_col1, form_col2 = st.columns(2, gap="large")
                 with form_col1:
-                    nome_aluno = st.text_input("Nome do Aluno", key="cad_nome", placeholder="Digite o nome completo")
+                    nome_aluno = st.text_input(
+                        "Nome do Aluno",
+                        key="cad_nome",
+                        placeholder="Digite o nome completo",
+                        disabled=st.session_state.get("cad_student_mode") == "existing" and selected_existing_student is not None,
+                    )
                 with form_col2:
-                    matricula = st.text_input("Matrícula", key="cad_matricula", placeholder="Digite a matrícula")
+                    matricula = st.text_input(
+                        "Matrícula",
+                        key="cad_matricula",
+                        placeholder="Gerada automaticamente",
+                        disabled=(
+                            st.session_state.get("cad_student_mode") == "new"
+                            or (st.session_state.get("cad_student_mode") == "existing" and selected_existing_student is not None)
+                        ),
+                    )
 
                 nome_norm = _normalize_student_name(nome_aluno)
                 matr_norm = _normalize_student_registration(matricula)
-                registration_errors = _validate_student_registration_fields(nome_aluno, matricula) if nome_aluno or matricula else []
+                should_validate_identification = not (
+                    st.session_state.get("cad_student_mode") == "existing" and selected_existing_student is not None
+                )
+                registration_errors = (
+                    _validate_student_registration_fields(
+                        nome_aluno,
+                        matricula,
+                        require_matricula=st.session_state.get("cad_student_mode") != "new",
+                    )
+                    if should_validate_identification and (
+                        bool(nome_aluno)
+                        if st.session_state.get("cad_student_mode") == "new"
+                        else bool(nome_aluno or matricula)
+                    )
+                    else []
+                )
                 registration_ready = bool(nome_norm and matr_norm and not registration_errors and st.session_state.get("cad_class_id") is not None)
 
                 if registration_errors:
                     for error in registration_errors:
                         st.warning(error)
 
-                with st.expander("Configurações da captura (opcional)", expanded=False):
-                    settings_col1, settings_col2 = st.columns(2, gap="large")
-                    with settings_col1:
-                        IMAGENS_POR_POSE = st.number_input("Número de poses por etapa", 1, 30, IMAGENS_POR_POSE, 1)
-                    with settings_col2:
-                        capture_interval = st.select_slider(
-                            "Qualidade mínima",
-                            options=[0.4, 0.8, 1.2, 1.6],
-                            value=capture_interval,
-                            format_func=lambda value: {
-                                0.4: "Muito alta",
-                                0.8: "Alta (recomendado)",
-                                1.2: "Média",
-                                1.6: "Econômica",
-                            }[value],
-                        )
-                    prep_seconds = st.slider("Contagem inicial (segundos)", 0, 5, prep_seconds, 1)
-
-                if not nome_norm and not matr_norm:
+                if not nome_norm:
                     st.markdown(
                         "<div style='border-radius:14px; padding:0.9rem 1rem; margin-top:0.9rem; "
                         "background:linear-gradient(180deg, rgba(72,50,148,0.32) 0%, rgba(48,32,95,0.28) 100%); "
@@ -2481,7 +2617,10 @@ def recognition_behavior():
                 elif not registration_ready:
                     st.info("Revise os campos informados para liberar a captura das imagens.")
                 else:
-                    st.success("Dados validados. A captura já pode ser iniciada.")
+                    if st.session_state.get("cad_student_mode") == "existing":
+                        st.success("Aluno existente selecionado. A captura pode ser usada para atualizar as poses dele.")
+                    else:
+                        st.success("Dados validados. A captura já pode ser iniciada.")
 
                 next_identification = st.button(
                     "➡️ Próximo para Captura",
@@ -2489,9 +2628,15 @@ def recognition_behavior():
                     use_container_width=True,
                 )
                 if next_identification:
+                    if st.session_state.get("cad_student_mode") == "new":
+                        generated_matricula = get_next_student_registration()
+                        st.session_state["cad_matricula"] = generated_matricula
+                        matricula = generated_matricula
                     st.session_state["cad_nome_locked"] = nome_aluno
                     st.session_state["cad_matricula_locked"] = matricula
                     st.session_state["cad_class_id_locked"] = st.session_state.get("cad_class_id")
+                    st.session_state["cad_student_mode_locked"] = st.session_state.get("cad_student_mode")
+                    st.session_state["cad_existing_student_id_locked"] = st.session_state.get("cad_existing_student_id")
                     st.session_state["student_registration_stage"] = "capture"
                     st.rerun()
         else:
@@ -2612,7 +2757,13 @@ def recognition_behavior():
 
         if registration_ready:
             selected_class_id = st.session_state.get("cad_class_id")
-            nome_criptografado = salvar_mapeamento(nome_norm, matr_norm)
+            if locked_student_mode == "new":
+                matr_norm = get_next_student_registration()
+                st.session_state["cad_matricula_locked"] = matr_norm
+            if locked_student_mode == "existing" and locked_existing_student_id:
+                nome_criptografado = str(locked_existing_student_id)
+            else:
+                nome_criptografado = salvar_mapeamento(nome_norm, matr_norm)
             upsert_student(nome_criptografado, nome_norm, matr_norm, selected_class_id)
 
             os.makedirs(DATABASE_PATH, exist_ok=True)
@@ -2626,15 +2777,19 @@ def recognition_behavior():
                 pd.DataFrame(columns=["nome", "matricula", "hash"]).to_csv(MAPPING_CSV, index=False)
 
             df = pd.read_csv(MAPPING_CSV)
-            mask = (df["nome"].astype(str).str.strip() == nome_norm) & \
-                   (df["matricula"].astype(str).str.strip() == matr_norm)
-            if mask.any():
-                df.loc[mask, "hash"] = nome_criptografado
+            hash_mask = df["hash"].astype(str).str.strip() == nome_criptografado
+            identity_mask = (df["nome"].astype(str).str.strip() == nome_norm) & \
+                            (df["matricula"].astype(str).str.strip() == matr_norm)
+            if hash_mask.any():
+                df.loc[hash_mask, ["nome", "matricula", "hash"]] = [nome_norm, matr_norm, nome_criptografado]
+            elif identity_mask.any():
+                df.loc[identity_mask, "hash"] = nome_criptografado
             else:
                 df = pd.concat(
                     [df, pd.DataFrame([{"nome": nome_norm, "matricula": matr_norm, "hash": nome_criptografado}])],
                     ignore_index=True
                 )
+            df = df.drop_duplicates(subset=["hash"], keep="first")
             df = df.drop_duplicates(subset=["nome", "matricula"], keep="first")
             df.to_csv(MAPPING_CSV, index=False)
 

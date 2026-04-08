@@ -28,6 +28,7 @@ AUTH_BOOTSTRAP_KEY = "auth_bootstrap_checked"
 AUTH_BOOTSTRAP_STARTED_AT_KEY = "auth_bootstrap_started_at"
 AUTH_BOOTSTRAP_GRACE_SECONDS = 0.6
 AUTH_TOKEN_TTL_SECONDS = 60 * 60 * 12
+AUTH_ENABLE_QUERY_TOKEN = os.getenv("AUTH_ENABLE_QUERY_TOKEN", "0").strip().lower() in {"1", "true", "yes", "on"}
 cookie_controller = CookieController(key="auth_cookies")
 
 # Mantemos um fallback por token assinado na URL porque a restauração via cookie
@@ -118,6 +119,8 @@ def issue_auth_token(cpf: str) -> str:
 
 
 def read_auth_token() -> str | None:
+    if not AUTH_ENABLE_QUERY_TOKEN:
+        return None
     try:
         token = st.query_params.get(AUTH_QUERY_TOKEN_KEY)
     except Exception:
@@ -128,6 +131,9 @@ def read_auth_token() -> str | None:
 
 
 def persist_auth_token(cpf: str) -> None:
+    if not AUTH_ENABLE_QUERY_TOKEN:
+        clear_auth_token()
+        return
     if not cpf:
         return
     try:
@@ -145,6 +151,9 @@ def clear_auth_token() -> None:
 
 
 def restore_auth_session_from_token() -> bool:
+    if not AUTH_ENABLE_QUERY_TOKEN:
+        clear_auth_token()
+        return False
     token = read_auth_token()
     if not token:
         return False
@@ -282,11 +291,7 @@ def restore_auth_session_from_cookie() -> bool:
         return True
 
     if st.session_state.get(AUTH_RESTORE_BLOCK_KEY):
-        delete_auth_cookie()
-        if get_auth_cookie():
-            reset_auth_session_state()
-            st.session_state[AUTH_BOOTSTRAP_KEY] = False
-            return False
+        reset_auth_session_state()
         st.session_state.pop(AUTH_RESTORE_BLOCK_KEY, None)
         st.session_state[AUTH_BOOTSTRAP_KEY] = True
         return False
@@ -294,6 +299,11 @@ def restore_auth_session_from_cookie() -> bool:
     if not cookie_controller_is_ready():
         st.session_state[AUTH_BOOTSTRAP_KEY] = False
         return False
+
+    try:
+        cookie_controller.refresh()
+    except Exception:
+        pass
 
     stored_cpf = get_auth_cookie()
     st.session_state[AUTH_BOOTSTRAP_KEY] = True
@@ -371,9 +381,10 @@ def login():
                             st.session_state['state'] = stored_state
                             st.session_state['role'] = stored_role
                             st.session_state['user_context'] = get_user_context(stored_cpf)
+                            st.session_state.pop(AUTH_RESTORE_BLOCK_KEY, None)
 
                             set_auth_cookie(stored_cpf)
-                            persist_auth_token(stored_cpf)
+                            clear_auth_token()
                             clear_legacy_auth_query_params()
 
                             st.success(f"Login realizado com sucesso! Bem-vindo, {stored_nome}")
@@ -502,11 +513,16 @@ def cadastrar_usuario():
 
 def main():
     st.session_state.setdefault(AUTH_BOOTSTRAP_STARTED_AT_KEY, time.time())
-    restore_auth_session_from_cookie()
+    if (
+        not st.session_state.get("authenticated", False)
+        and not st.session_state.get(AUTH_RESTORE_BLOCK_KEY, False)
+    ):
+        restore_auth_session_from_cookie()
 
     if st.session_state.get("authenticated", False):
+        st.session_state.pop(AUTH_RESTORE_BLOCK_KEY, None)
         ensure_auth_cookie_synced()
-        persist_auth_token(st.session_state.get("cpf"))
+        clear_auth_token()
         st.session_state[AUTH_BOOTSTRAP_KEY] = True
         st.session_state[AUTH_BOOTSTRAP_STARTED_AT_KEY] = time.time()
         if "user_context" not in st.session_state and st.session_state.get("cpf"):

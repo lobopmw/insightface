@@ -494,6 +494,34 @@ def upsert_student(student_id: str, name: str, matricula: str | None = None, cla
         conn.commit()
 
 
+def get_next_student_registration(prefix: str | None = None, min_digits: int = 3) -> str:
+    prefix = (prefix or f"MAT{get_local_now().year}").strip().upper()
+
+    with connect_database() as (_, cursor):
+        cursor.execute(
+            """
+            SELECT matricula
+            FROM students
+            WHERE UPPER(COALESCE(matricula, '')) LIKE %s
+            ORDER BY created_at DESC NULLS LAST, matricula DESC
+            """,
+            (f"{prefix}%",),
+        )
+        rows = cursor.fetchall()
+
+    max_sequence = 0
+    for (matricula,) in rows:
+        value = str(matricula or "").strip().upper()
+        if not value.startswith(prefix):
+            continue
+        suffix = value[len(prefix):]
+        if suffix.isdigit() and len(suffix) >= min_digits:
+            max_sequence = max(max_sequence, int(suffix))
+
+    next_sequence = str(max_sequence + 1).zfill(min_digits)
+    return f"{prefix}{next_sequence}"
+
+
 def list_teacher_assignments(teacher_id: int):
     query = """
         SELECT
