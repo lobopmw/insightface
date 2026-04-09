@@ -98,6 +98,69 @@ def _chart_icon_svg(kind: str) -> str:
     return icons.get(kind, icons["summary"])
 
 
+def _cleanup_duplicate_students(cursor) -> int:
+    cursor.execute(
+        """
+        WITH ranked AS (
+            SELECT
+                id,
+                class_id,
+                UPPER(BTRIM(matricula)) AS matricula_norm,
+                ROW_NUMBER() OVER (
+                    PARTITION BY class_id, UPPER(BTRIM(matricula))
+                    ORDER BY created_at ASC, id ASC
+                ) AS row_num,
+                FIRST_VALUE(id) OVER (
+                    PARTITION BY class_id, UPPER(BTRIM(matricula))
+                    ORDER BY created_at ASC, id ASC
+                ) AS keep_id
+            FROM students
+            WHERE NULLIF(BTRIM(COALESCE(matricula, '')), '') IS NOT NULL
+        )
+        SELECT id, keep_id
+        FROM ranked
+        WHERE row_num > 1
+        """
+    )
+    duplicate_rows = cursor.fetchall()
+    if not duplicate_rows:
+        return 0
+
+    for duplicate_id, keep_id in duplicate_rows:
+        if duplicate_id == keep_id:
+            continue
+
+        cursor.execute(
+            "UPDATE behavior_episode SET student_id = %s WHERE student_id = %s",
+            (keep_id, duplicate_id),
+        )
+        cursor.execute(
+            "UPDATE behavior_episode SET id_student = %s WHERE id_student = %s",
+            (keep_id, duplicate_id),
+        )
+        cursor.execute(
+            "UPDATE behavior_log SET id_student = %s WHERE id_student = %s",
+            (keep_id, duplicate_id),
+        )
+        cursor.execute(
+            """
+            UPDATE face_embeddings
+            SET student_hash = %s
+            WHERE student_hash = %s
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM face_embeddings existing_embedding
+                  WHERE existing_embedding.student_hash = %s
+              )
+            """,
+            (keep_id, duplicate_id, keep_id),
+        )
+        cursor.execute("DELETE FROM face_embeddings WHERE student_hash = %s", (duplicate_id,))
+        cursor.execute("DELETE FROM students WHERE id = %s", (duplicate_id,))
+
+    return len(duplicate_rows)
+
+
 def _ensure_schema(cursor) -> None:
     cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
@@ -187,7 +250,6 @@ def _ensure_schema(cursor) -> None:
     cursor.execute(
         "ALTER TABLE students ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP"
     )
-
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS face_embeddings (
@@ -296,6 +358,14 @@ def _ensure_schema(cursor) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_monitoring_sessions_scope
         ON monitoring_sessions (teacher_id, subject_id, class_id, session_date)
+        """
+    )
+    _cleanup_duplicate_students(cursor)
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_students_class_matricula_normalized
+        ON students (class_id, UPPER(BTRIM(matricula)))
+        WHERE NULLIF(BTRIM(COALESCE(matricula, '')), '') IS NOT NULL
         """
     )
 
@@ -478,6 +548,25 @@ def reset_user_password(user_id: int, hashed_password: str):
 
 def upsert_student(student_id: str, name: str, matricula: str | None = None, class_id: int | None = None):
     with connect_database() as (conn, cursor):
+        effective_student_id = student_id
+        normalized_matricula = (matricula or "").strip()
+
+        if normalized_matricula and class_id is not None:
+            cursor.execute(
+                """
+                SELECT id
+                FROM students
+                WHERE class_id = %s
+                  AND UPPER(BTRIM(COALESCE(matricula, ''))) = UPPER(BTRIM(%s))
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
+                """,
+                (class_id, normalized_matricula),
+            )
+            existing_row = cursor.fetchone()
+            if existing_row:
+                effective_student_id = existing_row[0]
+
         cursor.execute(
             """
             INSERT INTO students (id, name, matricula, class_id, ativo)
@@ -489,9 +578,10 @@ def upsert_student(student_id: str, name: str, matricula: str | None = None, cla
                 class_id = COALESCE(EXCLUDED.class_id, students.class_id),
                 ativo = TRUE
             """,
-            (student_id, name, matricula, class_id),
+            (effective_student_id, name, matricula, class_id),
         )
         conn.commit()
+        return effective_student_id
 
 
 def get_next_student_registration(prefix: str | None = None, min_digits: int = 3) -> str:

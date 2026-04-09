@@ -46,7 +46,7 @@ from PIL import Image
 from insightface.app import FaceAnalysis
 import warnings
 import hashlib
-from utils_criptografia import salvar_mapeamento
+from utils_criptografia import gerar_hash_nome_matricula
 from socket_video_stream import VideoStream  # cliente do relay via socket
 import threading
 from collections import deque
@@ -2312,6 +2312,53 @@ def recognition_behavior():
         pose_done         = st.session_state.get("pose_done", False)
         registration_done = st.session_state.get("registration_done", False)
 
+        def _sync_student_mapping(student_id: str, student_name: str, student_registration: str) -> None:
+            if not student_id or not student_name or not student_registration:
+                return
+
+            if not os.path.exists(MAPPING_CSV):
+                pd.DataFrame(columns=["nome", "matricula", "hash"]).to_csv(MAPPING_CSV, index=False)
+
+            df = pd.read_csv(MAPPING_CSV)
+            hash_mask = df["hash"].astype(str).str.strip() == str(student_id).strip()
+            identity_mask = (
+                df["nome"].astype(str).str.strip() == str(student_name).strip()
+            ) & (
+                df["matricula"].astype(str).str.strip() == str(student_registration).strip()
+            )
+
+            if hash_mask.any():
+                df.loc[hash_mask, ["nome", "matricula", "hash"]] = [student_name, student_registration, student_id]
+            elif identity_mask.any():
+                df.loc[identity_mask, "hash"] = student_id
+            else:
+                df = pd.concat(
+                    [
+                        df,
+                        pd.DataFrame(
+                            [{"nome": student_name, "matricula": student_registration, "hash": student_id}]
+                        ),
+                    ],
+                    ignore_index=True,
+                )
+
+            df = df.drop_duplicates(subset=["hash"], keep="first")
+            df = df.drop_duplicates(subset=["nome", "matricula"], keep="first")
+            df.to_csv(MAPPING_CSV, index=False)
+
+        def _persist_completed_student_registration(
+            student_id: str,
+            student_name: str,
+            student_registration: str,
+            class_id: int | None,
+        ) -> str:
+            if not student_id or not student_name or not student_registration:
+                raise ValueError("Dados insuficientes para persistir o cadastro do aluno.")
+
+            upsert_student(student_id, student_name, student_registration, class_id)
+            _sync_student_mapping(student_id, student_name, student_registration)
+            return student_id
+
         # Tela de conclusão
         if registration_done:
             ultimo_nome = st.session_state.get("last_cad_nome", "")
@@ -2469,6 +2516,8 @@ def recognition_behavior():
         start_btn = False
         cancel_btn = False
         next_btn = False
+        nome_criptografado = ""
+        pasta_base = ""
 
         if registration_stage == "identify":
             with st.container(border=True):
@@ -2641,6 +2690,18 @@ def recognition_behavior():
                     st.rerun()
         else:
             selected_class_id = st.session_state.get("cad_class_id_locked", st.session_state.get("cad_class_id"))
+            if locked_student_mode == "existing" and locked_existing_student_id:
+                nome_criptografado = str(locked_existing_student_id)
+            elif nome_norm and matr_norm:
+                nome_criptografado = gerar_hash_nome_matricula(nome_norm, matr_norm)
+
+            if nome_criptografado:
+                os.makedirs(DATABASE_PATH, exist_ok=True)
+                pasta_base = os.path.join(DATABASE_PATH, nome_criptografado)
+                os.makedirs(pasta_base, exist_ok=True)
+                for _pose in POSES:
+                    os.makedirs(os.path.join(pasta_base, _pose), exist_ok=True)
+
             capture_left_col, capture_right_col = st.columns([0.95, 1.35], gap="large")
 
             with capture_left_col:
@@ -2755,44 +2816,7 @@ def recognition_behavior():
                         "linear-gradient(180deg, #5F49D6 0%, #4633A8 100%)",
                     )
 
-        if registration_ready:
-            selected_class_id = st.session_state.get("cad_class_id")
-            if locked_student_mode == "new":
-                matr_norm = get_next_student_registration()
-                st.session_state["cad_matricula_locked"] = matr_norm
-            if locked_student_mode == "existing" and locked_existing_student_id:
-                nome_criptografado = str(locked_existing_student_id)
-            else:
-                nome_criptografado = salvar_mapeamento(nome_norm, matr_norm)
-            upsert_student(nome_criptografado, nome_norm, matr_norm, selected_class_id)
-
-            os.makedirs(DATABASE_PATH, exist_ok=True)
-            pasta_base = os.path.join(DATABASE_PATH, nome_criptografado)
-            os.makedirs(pasta_base, exist_ok=True)
-            for _pose in POSES:
-                os.makedirs(os.path.join(pasta_base, _pose), exist_ok=True)
-
-            # CSV fora da pasta 'alunos'
-            if not os.path.exists(MAPPING_CSV):
-                pd.DataFrame(columns=["nome", "matricula", "hash"]).to_csv(MAPPING_CSV, index=False)
-
-            df = pd.read_csv(MAPPING_CSV)
-            hash_mask = df["hash"].astype(str).str.strip() == nome_criptografado
-            identity_mask = (df["nome"].astype(str).str.strip() == nome_norm) & \
-                            (df["matricula"].astype(str).str.strip() == matr_norm)
-            if hash_mask.any():
-                df.loc[hash_mask, ["nome", "matricula", "hash"]] = [nome_norm, matr_norm, nome_criptografado]
-            elif identity_mask.any():
-                df.loc[identity_mask, "hash"] = nome_criptografado
-            else:
-                df = pd.concat(
-                    [df, pd.DataFrame([{"nome": nome_norm, "matricula": matr_norm, "hash": nome_criptografado}])],
-                    ignore_index=True
-                )
-            df = df.drop_duplicates(subset=["hash"], keep="first")
-            df = df.drop_duplicates(subset=["nome", "matricula"], keep="first")
-            df.to_csv(MAPPING_CSV, index=False)
-
+        if registration_stage == "capture" and registration_ready and pasta_base:
             if start_btn:
                 st.session_state.cap_running = True
                 st.session_state.pose_done = False
@@ -2816,10 +2840,16 @@ def recognition_behavior():
                     st.session_state.next_time   = None
                     st.rerun()
                 else:
+                    persisted_student_id = _persist_completed_student_registration(
+                        nome_criptografado,
+                        nome_norm,
+                        matr_norm,
+                        selected_class_id,
+                    )
                     st.session_state.registration_done = True
                     st.session_state.last_cad_nome = nome_norm
                     st.session_state.last_cad_matricula = matr_norm
-                    st.session_state.last_cad_hash = nome_criptografado
+                    st.session_state.last_cad_hash = persisted_student_id
                     st.session_state.last_embedding_status = None
                     st.session_state.last_embedding_message = ""
                     st.session_state.cap_running = False
@@ -2897,10 +2927,16 @@ def recognition_behavior():
                                     st.session_state.next_time = None
 
                                     if pose_index == len(POSES) - 1:
+                                        persisted_student_id = _persist_completed_student_registration(
+                                            nome_criptografado,
+                                            nome_norm,
+                                            matr_norm,
+                                            selected_class_id,
+                                        )
                                         st.session_state.registration_done = True
                                         st.session_state.last_cad_nome = nome_norm
                                         st.session_state.last_cad_matricula = matr_norm
-                                        st.session_state.last_cad_hash = nome_criptografado
+                                        st.session_state.last_cad_hash = persisted_student_id
                                         st.session_state.last_embedding_status = None
                                         st.session_state.last_embedding_message = ""
                                     else:
