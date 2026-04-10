@@ -118,10 +118,12 @@ FACE_REFRESH_INTERVAL_CPU = 0.30
 FACE_RECOGNITION_BASE_THRESHOLD = 0.45
 FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.39
 FACE_RECOGNITION_SMALL_THRESHOLD = 0.34
+FACE_RECOGNITION_TINY_THRESHOLD = 0.28
 FACE_RECOGNITION_MIN_MARGIN = 0.015
+FACE_RECOGNITION_TINY_MARGIN = 0.005
 FAR_FACE_REGION_TOP_RATIO = float(os.getenv("FAR_FACE_REGION_TOP_RATIO", "0.68"))
-FAR_FACE_UPSCALE = float(os.getenv("FAR_FACE_UPSCALE", "1.0"))
-FAR_FACE_EXTRA_PASS_MAX_BASE_FACES = int(os.getenv("FAR_FACE_EXTRA_PASS_MAX_BASE_FACES", "4"))
+FAR_FACE_UPSCALE = float(os.getenv("FAR_FACE_UPSCALE", "1.35"))
+FAR_FACE_EXTRA_PASS_MAX_BASE_FACES = int(os.getenv("FAR_FACE_EXTRA_PASS_MAX_BASE_FACES", "2"))
 FAR_FACE_MERGE_IOU = float(os.getenv("FAR_FACE_MERGE_IOU", "0.20"))
 
 CAPTURE_POSE_LABELS = {
@@ -140,6 +142,7 @@ MONITOR_FRAME_STALE_SECONDS = float(os.getenv("MONITOR_FRAME_STALE_SECONDS", "2.
 MONITOR_UI_REFRESH_SECONDS = float(os.getenv("MONITOR_UI_REFRESH_SECONDS", "0.28"))
 MONITOR_DETECTOR_STALE_SECONDS = float(os.getenv("MONITOR_DETECTOR_STALE_SECONDS", "1.8"))
 MONITOR_SYNC_FALLBACK_COOLDOWN = float(os.getenv("MONITOR_SYNC_FALLBACK_COOLDOWN", "0.9"))
+MONITOR_RECOGNIZED_HOLD_SECONDS = float(os.getenv("MONITOR_RECOGNIZED_HOLD_SECONDS", "3.5"))
 
 
 def _release_registration_camera() -> None:
@@ -1260,6 +1263,24 @@ def _render_monitor_video_summary_markup(video_snapshot: dict) -> None:
     """
 
 
+def _update_recognized_students_metric(recognized_students_now: set[str]) -> int:
+    now = time.time()
+    remembered = st.session_state.get("monitor_recognized_students", {})
+    if not isinstance(remembered, dict):
+        remembered = {}
+
+    refreshed = {
+        name: ts
+        for name, ts in remembered.items()
+        if (now - float(ts)) <= MONITOR_RECOGNIZED_HOLD_SECONDS
+    }
+    for name in recognized_students_now:
+        refreshed[name] = now
+
+    st.session_state["monitor_recognized_students"] = refreshed
+    return len(refreshed)
+
+
 def render_monitor_video_summary_fragment(current_session_id=None, placeholder=None):
     current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
     video_snapshot = _get_monitor_video_snapshot(current_session)
@@ -1570,7 +1591,7 @@ def process_monitor_fragment(
 
     face_named = []
     detected_faces_count = 0
-    recognized_faces_count = 0
+    recognized_students_now = set()
     if faces:
         detected_faces_count = len(faces)
         for face in faces:
@@ -1578,7 +1599,7 @@ def process_monitor_fragment(
             name_face = identify_face(face, known_face_encodings_norm, known_face_names)
             face_named.append(((fx1, fy1, fx2, fy2), name_face))
             if name_face != "Desconhecido":
-                recognized_faces_count += 1
+                recognized_students_now.add(name_face)
                 remember_name((fx1, fy1, fx2, fy2), name_face)
 
     rendered_tracks_count = 0
@@ -1678,6 +1699,7 @@ def process_monitor_fragment(
                     current_behavior = state["state"]
 
                 if name_student != "Desconhecido" and episode_manager is not None:
+                    recognized_students_now.add(name_student)
                     now_dt = get_local_now()
                     student_record = student_lookup.get(name_student, {})
                     episode_manager.update_behavior(
@@ -1742,27 +1764,6 @@ def process_monitor_fragment(
                             }
                         )
 
-    for face_box, recognized_name in face_named:
-        if recognized_name == "Desconhecido":
-            continue
-        if any(iou(face_box, box) >= 0.08 for box in rendered_identity_boxes):
-            continue
-        fx1, fy1, fx2, fy2 = [int(v) for v in face_box]
-        rendered_tracks_count += 1
-        rendered_identity_boxes.append((fx1, fy1, fx2, fy2))
-        overlays.append(
-            {
-                "x1": fx1,
-                "y1": fy1,
-                "x2": fx2,
-                "y2": fy2,
-                "label": f"{recognized_name} - rosto distante",
-                "color": "#38bdf8",
-                "label_bg": "#082f49",
-                "label_fg": "#e0f2fe",
-            }
-        )
-
     last_rendered_frame_id = st.session_state.get("monitor_last_rendered_frame_id", -1)
     if frame_id != last_rendered_frame_id:
         st.session_state["monitor_last_rendered_frame_id"] = frame_id
@@ -1784,6 +1785,7 @@ def process_monitor_fragment(
     else:
         _update_monitor_status(status_placeholder, "empty")
 
+    recognized_faces_count = _update_recognized_students_metric(recognized_students_now)
     st.session_state["monitor_live_stats"] = {
         "detected_faces_count": detected_faces_count,
         "recognized_faces_count": recognized_faces_count,
@@ -1840,15 +1842,21 @@ def identify_face(face, known_face_encodings_norm, known_face_names):
 
     fx1, fy1, fx2, fy2 = face.bbox.astype(int)
     face_area = max(1, (fx2 - fx1) * (fy2 - fy1))
-    if face_area < 7000:
+    if face_area < 3500:
+        acceptance_threshold = FACE_RECOGNITION_TINY_THRESHOLD
+        min_margin = FACE_RECOGNITION_TINY_MARGIN
+    elif face_area < 7000:
         acceptance_threshold = FACE_RECOGNITION_SMALL_THRESHOLD
+        min_margin = FACE_RECOGNITION_MIN_MARGIN * 0.7
     elif face_area < 14000:
         acceptance_threshold = FACE_RECOGNITION_MEDIUM_THRESHOLD
+        min_margin = FACE_RECOGNITION_MIN_MARGIN
     else:
         acceptance_threshold = FACE_RECOGNITION_BASE_THRESHOLD
+        min_margin = FACE_RECOGNITION_MIN_MARGIN
 
     margin = best_score - second_best_score if second_best_score >= 0 else best_score
-    if best_score >= acceptance_threshold and margin >= FACE_RECOGNITION_MIN_MARGIN:
+    if best_score >= acceptance_threshold and margin >= min_margin:
         return known_face_names[best_idx]
 
     return "Desconhecido"
