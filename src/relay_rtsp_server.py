@@ -37,15 +37,58 @@ def start_relay(
     last_id = [0]
     lock = threading.Lock()
     running = True
+    reconnect_fail_sleep = 1.0
+    max_consecutive_failures = 3
+
+    def clear_last_frame():
+        with lock:
+            last_frame[0] = None
+
+    def reopen_capture(reason: str):
+        nonlocal cap
+        clear_last_frame()
+        try:
+            cap.release()
+        except Exception:
+            pass
+
+        while running:
+            try:
+                print(f"[relay] Reabrindo RTSP: {reason}")
+                cap = open_capture(rtsp_url, width, height)
+                for _ in range(3):
+                    ok, _ = cap.read()
+                    if ok:
+                        break
+                print("[relay] RTSP reaberto com sucesso")
+                return
+            except Exception as exc:
+                print(f"[relay] Falha ao reabrir RTSP: {exc}")
+                time.sleep(reconnect_fail_sleep)
 
     def grabber():
+        nonlocal cap
         # descarta alguns frames iniciais
-        for _ in range(3): cap.read()
+        for _ in range(3):
+            cap.read()
+        consecutive_failures = 0
+        last_ok_at = time.time()
         while running:
             ok, frame = cap.read()
-            if not ok:
-                time.sleep(0.01)
+            now = time.time()
+            if not ok or frame is None:
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures or (now - last_ok_at) > 3.0:
+                    reopen_capture(
+                        f"{consecutive_failures} falhas consecutivas de leitura e {now - last_ok_at:.1f}s sem frame"
+                    )
+                    consecutive_failures = 0
+                    last_ok_at = time.time()
+                else:
+                    time.sleep(0.05)
                 continue
+            consecutive_failures = 0
+            last_ok_at = now
             with lock:
                 last_frame[0] = frame
                 last_id[0] += 1  # marca "chegou frame novo"

@@ -119,6 +119,10 @@ FACE_RECOGNITION_BASE_THRESHOLD = 0.45
 FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.39
 FACE_RECOGNITION_SMALL_THRESHOLD = 0.34
 FACE_RECOGNITION_MIN_MARGIN = 0.015
+FAR_FACE_REGION_TOP_RATIO = float(os.getenv("FAR_FACE_REGION_TOP_RATIO", "0.68"))
+FAR_FACE_UPSCALE = float(os.getenv("FAR_FACE_UPSCALE", "1.0"))
+FAR_FACE_EXTRA_PASS_MAX_BASE_FACES = int(os.getenv("FAR_FACE_EXTRA_PASS_MAX_BASE_FACES", "4"))
+FAR_FACE_MERGE_IOU = float(os.getenv("FAR_FACE_MERGE_IOU", "0.20"))
 
 CAPTURE_POSE_LABELS = {
     "frontal": "Frontal",
@@ -132,6 +136,10 @@ REGISTRATION_CAMERA_INDEX = int(os.getenv("CADASTRO_CAMERA_INDEX", os.getenv("CA
 REGISTRATION_CAMERA_WIDTH = int(os.getenv("CADASTRO_CAMERA_WIDTH", "640"))
 REGISTRATION_CAMERA_HEIGHT = int(os.getenv("CADASTRO_CAMERA_HEIGHT", "480"))
 REGISTRATION_CAMERA_WARMUP_FRAMES = max(3, int(os.getenv("CADASTRO_CAMERA_WARMUP_FRAMES", "8")))
+MONITOR_FRAME_STALE_SECONDS = float(os.getenv("MONITOR_FRAME_STALE_SECONDS", "2.5"))
+MONITOR_UI_REFRESH_SECONDS = float(os.getenv("MONITOR_UI_REFRESH_SECONDS", "0.28"))
+MONITOR_DETECTOR_STALE_SECONDS = float(os.getenv("MONITOR_DETECTOR_STALE_SECONDS", "1.8"))
+MONITOR_SYNC_FALLBACK_COOLDOWN = float(os.getenv("MONITOR_SYNC_FALLBACK_COOLDOWN", "0.9"))
 
 
 def _release_registration_camera() -> None:
@@ -1223,42 +1231,50 @@ def _get_monitor_video_snapshot(current_session=None) -> dict:
     }
 
 
-@st.fragment(run_every=1.0)
-def render_monitor_video_summary_fragment(current_session_id=None):
+def _render_monitor_video_summary_markup(video_snapshot: dict) -> None:
+    return f"""
+    <div class="monitor-video-head" style="padding:0 0 1rem 0; border-bottom:none;">
+        <div class="monitor-card-title-wrap">
+            <div class="monitor-card-icon monitor-card-icon-purple">{_monitor_hero_icon_svg()}</div>
+            <div class="monitor-card-title">Vídeo de Monitoramento</div>
+        </div>
+        <div class="monitor-video-badge {video_snapshot['badge_class']}">
+            <span>●</span>
+            <span>{html.escape(video_snapshot['badge_text'])}</span>
+        </div>
+    </div>
+    <div class="monitor-video-metrics" style="padding:0 0 1rem 0;">
+        <div class="monitor-metric-box">
+            <div class="monitor-metric-label">Status</div>
+            <div class="monitor-metric-value">{html.escape(video_snapshot['state_label'])}</div>
+        </div>
+        <div class="monitor-metric-box">
+            <div class="monitor-metric-label">Duração da sessão</div>
+            <div class="monitor-metric-value">{html.escape(video_snapshot['duration_label'])}</div>
+        </div>
+        <div class="monitor-metric-box">
+            <div class="monitor-metric-label">Alunos reconhecidos agora</div>
+            <div class="monitor-metric-value">{video_snapshot['recognized_now']}</div>
+        </div>
+    </div>
+    """
+
+
+def render_monitor_video_summary_fragment(current_session_id=None, placeholder=None):
     current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
     video_snapshot = _get_monitor_video_snapshot(current_session)
-    st.markdown(
-        f"""
-        <div class="monitor-video-head" style="padding:0 0 1rem 0; border-bottom:none;">
-            <div class="monitor-card-title-wrap">
-                <div class="monitor-card-icon monitor-card-icon-purple">{_monitor_hero_icon_svg()}</div>
-                <div class="monitor-card-title">Vídeo de Monitoramento</div>
-            </div>
-            <div class="monitor-video-badge {video_snapshot['badge_class']}">
-                <span>●</span>
-                <span>{html.escape(video_snapshot['badge_text'])}</span>
-            </div>
-        </div>
-        <div class="monitor-video-metrics" style="padding:0 0 1rem 0;">
-            <div class="monitor-metric-box">
-                <div class="monitor-metric-label">Status</div>
-                <div class="monitor-metric-value">{html.escape(video_snapshot['state_label'])}</div>
-            </div>
-            <div class="monitor-metric-box">
-                <div class="monitor-metric-label">Duração da sessão</div>
-                <div class="monitor-metric-value">{html.escape(video_snapshot['duration_label'])}</div>
-            </div>
-            <div class="monitor-metric-box">
-                <div class="monitor-metric-label">Alunos reconhecidos agora</div>
-                <div class="monitor-metric-value">{video_snapshot['recognized_now']}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    markup = _render_monitor_video_summary_markup(video_snapshot)
+    if placeholder is None:
+        st.markdown(markup, unsafe_allow_html=True)
+        return
+
+    cached = st.session_state.get("monitor_summary_html")
+    if cached == markup:
+        return
+    st.session_state["monitor_summary_html"] = markup
+    placeholder.markdown(markup, unsafe_allow_html=True)
 
 
-@st.fragment(run_every=1.0)
 def render_context_fragment(session_state_label: str, selected_subject_label: str, selected_class_label: str, session_data=None):
     _render_context_card(session_state_label, selected_subject_label, selected_class_label, session_data)
 
@@ -1347,7 +1363,50 @@ def _render_monitor_frame(
     frame_placeholder.markdown(frame_html, unsafe_allow_html=True)
 
 
-@st.fragment(run_every=0.06)
+def _render_monitor_stream_placeholder(frame_placeholder, title: str, subtitle: str) -> None:
+    if frame_placeholder is None:
+        return
+    placeholder_html = f"""
+    <div class="monitor-placeholder">
+        <div>
+            <div class="monitor-placeholder-icon">{_monitor_hero_icon_svg()}</div>
+            <div class="monitor-placeholder-title">{html.escape(title)}</div>
+            <div class="monitor-placeholder-subtitle">{html.escape(subtitle)}</div>
+        </div>
+    </div>
+    """
+    cached = st.session_state.get("monitor_last_display_frame")
+    if isinstance(cached, dict) and cached.get("html") == placeholder_html:
+        return
+    st.session_state["monitor_last_display_frame"] = {
+        "frame_id": "placeholder",
+        "html": placeholder_html,
+    }
+    frame_placeholder.markdown(placeholder_html, unsafe_allow_html=True)
+
+
+def _update_monitor_status(status_placeholder, level: str, message: str | None = None) -> None:
+    previous = st.session_state.get("monitor_status_message")
+    if level == "empty":
+        if previous is None:
+            return
+        status_placeholder.empty()
+        st.session_state.pop("monitor_status_message", None)
+        return
+
+    payload = {"level": level, "message": message or ""}
+    if previous == payload:
+        return
+
+    if level == "warning":
+        status_placeholder.warning(payload["message"])
+    elif level == "error":
+        status_placeholder.error(payload["message"])
+    else:
+        status_placeholder.info(payload["message"])
+    st.session_state["monitor_status_message"] = payload
+
+
 def render_monitor_preview_fragment(frame_placeholder):
     runtime = st.session_state.get("monitor_runtime")
     video_stream = None if runtime is None else runtime.get("video_stream")
@@ -1355,7 +1414,14 @@ def render_monitor_preview_fragment(frame_placeholder):
         return
     if not hasattr(video_stream, "read_jpeg_with_meta"):
         return
-    frame_jpeg, frame_id, _ = video_stream.read_jpeg_with_meta()
+    frame_jpeg, frame_id, last_frame_at = video_stream.read_jpeg_with_meta()
+    if last_frame_at is not None and (time.time() - float(last_frame_at)) > MONITOR_FRAME_STALE_SECONDS:
+        _render_monitor_stream_placeholder(
+            frame_placeholder,
+            "Sinal de video interrompido",
+            "O relay continua ativo, mas nao recebeu frame novo do RTSP recentemente.",
+        )
+        return
     if frame_jpeg is None:
         return
     overlays = st.session_state.get("monitor_last_overlays", [])
@@ -1370,16 +1436,18 @@ def render_monitor_preview_fragment(frame_placeholder):
     )
 
 
-@st.fragment(run_every=0.14)
+@st.fragment(run_every=MONITOR_UI_REFRESH_SECONDS)
 def process_monitor_fragment(
     school: str,
     discipline: str,
     user_name: str,
+    current_session_id,
     confidence_threshold: float,
     show_debug: bool,
     debug_font: float,
     box_margin_ratio: float,
     show_unknown_boxes: bool,
+    summary_placeholder,
     status_placeholder,
     frame_placeholder,
 ):
@@ -1394,6 +1462,7 @@ def process_monitor_fragment(
     frame = None
     frame_jpeg = None
     frame_id = 0
+    frame_last_at = None
     st.session_state["monitor_live_stats"] = {
         "detected_faces_count": 0,
         "recognized_faces_count": 0,
@@ -1401,15 +1470,25 @@ def process_monitor_fragment(
     }
     if video_stream is not None:
         if hasattr(video_stream, "read_latest_with_meta"):
-            frame, frame_jpeg, frame_id, _ = video_stream.read_latest_with_meta()
+            frame, frame_jpeg, frame_id, frame_last_at = video_stream.read_latest_with_meta()
         elif hasattr(video_stream, "read_with_meta"):
-            frame, frame_id, _ = video_stream.read_with_meta()
+            frame, frame_id, frame_last_at = video_stream.read_with_meta()
             if hasattr(video_stream, "read_jpeg_with_meta"):
-                frame_jpeg, _, _ = video_stream.read_jpeg_with_meta()
+                frame_jpeg, _, frame_last_at = video_stream.read_jpeg_with_meta()
         else:
             frame = video_stream.read()
             status = video_stream.get_status() if hasattr(video_stream, "get_status") else {}
             frame_id = status.get("frame_id", status.get("frames_received", 0))
+            frame_last_at = status.get("last_frame_at")
+
+    frame_stale = (
+        frame_last_at is not None
+        and (time.time() - float(frame_last_at)) > MONITOR_FRAME_STALE_SECONDS
+    )
+    if frame_stale:
+        frame = None
+        frame_jpeg = None
+
     if frame is None:
         status = video_stream.get_status() if video_stream is not None else {
             "server": (RELAY_HOST, RELAY_PORT),
@@ -1423,7 +1502,9 @@ def process_monitor_fragment(
         if status["last_frame_at"] is not None:
             last_frame_age = time.time() - status["last_frame_at"]
 
-        status_placeholder.warning(
+        _update_monitor_status(
+            status_placeholder,
+            "warning",
             "\n".join(
                 [
                     f"Aguardando frames do relay `{status['server'][0]}:{status['server'][1]}`",
@@ -1432,12 +1513,20 @@ def process_monitor_fragment(
                     f"Ultimo frame ha: {f'{last_frame_age:.1f}s' if last_frame_age is not None else 'nenhum'}",
                     f"Ultimo erro: {status['last_error'] or 'nenhum'}",
                 ]
-            )
+            ),
         )
+        if frame_stale and frame_placeholder is not None:
+            _render_monitor_stream_placeholder(
+                frame_placeholder,
+                "Sinal de video interrompido",
+                "O ultimo frame recebido ficou antigo. Verifique o RTSP e os logs do relay.",
+            )
         if waited > 10:
-            status_placeholder.error(
+            _update_monitor_status(
+                status_placeholder,
+                "error",
                 "O app conectou no relay, mas nao recebeu frame util a tempo. "
-                "Valide os logs do container `relay` e a estabilidade do RTSP."
+                "Valide os logs do container `relay` e a estabilidade do RTSP.",
             )
         return False
 
@@ -1458,7 +1547,7 @@ def process_monitor_fragment(
         detector is not None
         and (
             detector_last_output_at in (None, 0.0)
-            or (time.time() - float(detector_last_output_at)) > 1.2
+            or (time.time() - float(detector_last_output_at)) > MONITOR_DETECTOR_STALE_SECONDS
             or detector_last_error
         )
     )
@@ -1466,7 +1555,7 @@ def process_monitor_fragment(
     if detector is not None and detector_stale and frame_id != detector_last_processed_frame_id:
         last_fallback_frame_id = st.session_state.get("monitor_last_sync_fallback_frame_id", -1)
         last_fallback_at = st.session_state.get("monitor_last_sync_fallback_at", 0.0)
-        if frame_id != last_fallback_frame_id and (time.time() - last_fallback_at) > 0.35:
+        if frame_id != last_fallback_frame_id and (time.time() - last_fallback_at) > MONITOR_SYNC_FALLBACK_COOLDOWN:
             try:
                 detector.force_process(frame, frame_id=frame_id)
                 st.session_state["monitor_last_sync_fallback_frame_id"] = frame_id
@@ -1495,6 +1584,7 @@ def process_monitor_fragment(
     rendered_tracks_count = 0
     hidden_unknown_tracks_count = 0
     overlays = []
+    rendered_identity_boxes = []
 
     if results:
         for result in results:
@@ -1612,6 +1702,7 @@ def process_monitor_fragment(
                 label_fg_hex = "#ffffff" if is_negative_behavior else "#14532d"
                 label_text = f"{name_student} - {current_behavior}"
                 rendered_tracks_count += 1
+                rendered_identity_boxes.append((x_min, y_min, x_max, y_max))
                 overlays.append(
                     {
                         "x1": x_min,
@@ -1651,22 +1742,47 @@ def process_monitor_fragment(
                             }
                         )
 
+    for face_box, recognized_name in face_named:
+        if recognized_name == "Desconhecido":
+            continue
+        if any(iou(face_box, box) >= 0.08 for box in rendered_identity_boxes):
+            continue
+        fx1, fy1, fx2, fy2 = [int(v) for v in face_box]
+        rendered_tracks_count += 1
+        rendered_identity_boxes.append((fx1, fy1, fx2, fy2))
+        overlays.append(
+            {
+                "x1": fx1,
+                "y1": fy1,
+                "x2": fx2,
+                "y2": fy2,
+                "label": f"{recognized_name} - rosto distante",
+                "color": "#38bdf8",
+                "label_bg": "#082f49",
+                "label_fg": "#e0f2fe",
+            }
+        )
+
     last_rendered_frame_id = st.session_state.get("monitor_last_rendered_frame_id", -1)
     if frame_id != last_rendered_frame_id:
         st.session_state["monitor_last_rendered_frame_id"] = frame_id
 
     if detector_last_error:
-        status_placeholder.warning(
+        _update_monitor_status(
+            status_placeholder,
+            "warning",
             "A deteccao entrou em modo de recuperacao. "
-            f"Ultimo erro do detector: {detector_last_error}"
+            f"Ultimo erro do detector: {detector_last_error}",
         )
     elif known_face_encodings_norm is None or len(known_face_names) == 0:
-        status_placeholder.warning(
+        _update_monitor_status(
+            status_placeholder,
+            "warning",
             "Nenhum embedding de aluno foi carregado. "
-            "Rode o processo de geracao de embeddings para habilitar o reconhecimento facial."
+            "Rode o processo de geracao de embeddings para habilitar o reconhecimento facial.",
         )
     else:
-        status_placeholder.empty()
+        _update_monitor_status(status_placeholder, "empty")
 
     st.session_state["monitor_live_stats"] = {
         "detected_faces_count": detected_faces_count,
@@ -1674,6 +1790,7 @@ def process_monitor_fragment(
         "rendered_tracks_count": rendered_tracks_count,
         "detector_last_error": detector_last_error,
     }
+    render_monitor_video_summary_fragment(current_session_id=current_session_id, placeholder=summary_placeholder)
     st.session_state["monitor_last_overlays"] = overlays
     st.session_state["monitor_last_frame_shape"] = frame.shape[:2]
     _render_monitor_frame(frame_placeholder, frame, frame_id=frame_id, jpeg_bytes=frame_jpeg, overlays=overlays)
@@ -1747,6 +1864,16 @@ def resolve_name(person_box):
         if i > best:
             best, who = i, item["name"]
     return who if best > 0.03 else "Desconhecido"
+
+
+def _merge_face_detections(base_faces, extra_faces, iou_threshold: float = FAR_FACE_MERGE_IOU):
+    merged_faces = list(base_faces or [])
+    for face in extra_faces or []:
+        face_box = tuple(float(v) for v in face.bbox.astype(float))
+        if any(iou(face_box, tuple(float(v) for v in existing.bbox.astype(float))) >= iou_threshold for existing in merged_faces):
+            continue
+        merged_faces.append(face)
+    return merged_faces
 
 # ---------------- Detector em thread separada (IA fora do loop de render) ----------------
 class DetectorWorker:
@@ -1836,6 +1963,45 @@ class DetectorWorker:
         self._fallback_mode = "cpu"
         self._last_error = None if reason is None else f"Detector mudou para CPU: {reason}"
 
+    def _detect_faces(self, frame_rgb):
+        base_faces = list(self.model_face.get(frame_rgb))
+        if (
+            FAR_FACE_UPSCALE <= 1.0
+            or len(base_faces) > FAR_FACE_EXTRA_PASS_MAX_BASE_FACES
+        ):
+            return base_faces
+
+        frame_h, frame_w = frame_rgb.shape[:2]
+        crop_h = max(1, int(frame_h * FAR_FACE_REGION_TOP_RATIO))
+        if crop_h >= frame_h:
+            crop_rgb = frame_rgb
+            y_offset = 0
+        else:
+            crop_rgb = frame_rgb[:crop_h, :, :]
+            y_offset = 0
+
+        upscaled = cv2.resize(
+            crop_rgb,
+            None,
+            fx=FAR_FACE_UPSCALE,
+            fy=FAR_FACE_UPSCALE,
+            interpolation=cv2.INTER_CUBIC,
+        )
+        boosted_faces = list(self.model_face.get(upscaled))
+        if not boosted_faces:
+            return base_faces
+
+        scale = float(FAR_FACE_UPSCALE)
+        for face in boosted_faces:
+            bbox = face.bbox.astype(np.float32)
+            bbox[0] /= scale
+            bbox[2] /= scale
+            bbox[1] = (bbox[1] / scale) + y_offset
+            bbox[3] = (bbox[3] / scale) + y_offset
+            face.bbox = bbox
+
+        return _merge_face_detections(base_faces, boosted_faces)
+
     def _infer(self, frame):
         try:
             results = self.model_pose.predict(
@@ -1854,7 +2020,7 @@ class DetectorWorker:
             )
             if should_refresh_faces:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                faces = self.model_face.get(rgb)
+                faces = self._detect_faces(rgb)
                 self._last_face_inference_at = now
             else:
                 faces = self._last_faces
@@ -1872,7 +2038,7 @@ class DetectorWorker:
                     half=False,
                 )
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                faces = self.model_face.get(rgb)
+                faces = self._detect_faces(rgb)
                 self._last_face_inference_at = time.time()
                 return results, faces
             raise
@@ -3292,7 +3458,6 @@ def recognition_behavior():
         )
 
         last_closed_session = st.session_state.get("last_closed_monitoring_session")
-        st.markdown("<div class='monitor-layout'>", unsafe_allow_html=True)
         monitor_left_col, monitor_right_col = st.columns([1.02, 2.05], gap="large")
         with monitor_left_col:
             with st.container(border=True):
@@ -3381,10 +3546,7 @@ def recognition_behavior():
             else:
                 session_panel = None
 
-            if ui_state == "Em andamento":
-                render_context_fragment(ui_state, selected_subject_label, selected_class_label, session_panel)
-            else:
-                _render_context_card(ui_state, selected_subject_label, selected_class_label, session_panel)
+            _render_context_card(ui_state, selected_subject_label, selected_class_label, session_panel)
 
             with st.container(border=True):
                 st.markdown(
@@ -3506,23 +3668,28 @@ def recognition_behavior():
 
         with monitor_right_col:
             with st.container(border=True):
-                render_monitor_video_summary_fragment(current_session_id)
+                monitor_summary_placeholder = st.empty()
+                render_monitor_video_summary_fragment(
+                    current_session_id=current_session_id,
+                    placeholder=monitor_summary_placeholder,
+                )
                 if current_session:
                     with st.container(border=True):
                         monitor_status_placeholder = st.empty()
                         monitor_frame_placeholder = st.empty()
-                        render_monitor_preview_fragment(monitor_frame_placeholder)
                         process_monitor_fragment(
                             school=school,
                             discipline=current_session["subject_name"],
                             user_name=user_name,
+                            current_session_id=current_session_id,
                             confidence_threshold=CONFIDENCE_THRESHOLD,
                             show_debug=show_debug,
                             debug_font=debug_font,
                             box_margin_ratio=BOX_MARGIN_RATIO,
                             show_unknown_boxes=show_unknown_boxes,
+                            summary_placeholder=monitor_summary_placeholder,
                             status_placeholder=monitor_status_placeholder,
-                            frame_placeholder=None,
+                            frame_placeholder=monitor_frame_placeholder,
                         )
                 else:
                     st.markdown(
@@ -3547,8 +3714,6 @@ def recognition_behavior():
                     """,
                     unsafe_allow_html=True,
                 )
-        st.markdown("</div>", unsafe_allow_html=True)
-
         if stop_system and current_session_id:
             episode_manager = st.session_state.get("episode_manager")
             if episode_manager is not None and current_session is not None:
