@@ -29,6 +29,11 @@ class BehaviorEpisodeManager:
         self.states: Dict[str, StudentEpisodeState] = {}
         self.last_persist_error: Optional[str] = None
 
+    @staticmethod
+    def _should_persist_behavior(behavior: str | None) -> bool:
+        normalized = str(behavior or "").strip().lower()
+        return normalized not in {"", "indeterminado"}
+
     def update_behavior(
         self,
         student_key: str,
@@ -149,6 +154,8 @@ class BehaviorEpisodeManager:
         end_time: datetime,
         source: str,
     ):
+        if not self._should_persist_behavior(behavior):
+            return
         try:
             self.persist_callback(
                 school=school,

@@ -104,7 +104,6 @@ def _build_behavior_summary(df: pd.DataFrame) -> pd.DataFrame:
             records=("behavior", "size"),
             total_duration_seconds=("duration_seconds", "sum"),
         )
-        .sort_values(["records", "total_duration_seconds", "behavior"], ascending=[False, False, True])
     )
     total_records = max(int(summary["records"].sum()), 1)
     total_duration = float(summary["total_duration_seconds"].sum())
@@ -112,6 +111,10 @@ def _build_behavior_summary(df: pd.DataFrame) -> pd.DataFrame:
     summary["duration_minutes"] = (summary["total_duration_seconds"] / 60.0).round(2)
     summary["duration_percentage"] = (
         (summary["total_duration_seconds"] / total_duration * 100.0).round(2) if total_duration > 0 else 0.0
+    )
+    summary = summary.sort_values(
+        ["total_duration_seconds", "records", "behavior"],
+        ascending=[False, False, True],
     )
     return summary.reset_index(drop=True)
 

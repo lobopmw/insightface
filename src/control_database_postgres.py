@@ -58,6 +58,13 @@ def get_local_now() -> datetime.datetime:
     return datetime.datetime.now(ZoneInfo(APP_TIMEZONE)).replace(tzinfo=None)
 
 
+def _exclude_indeterminate_behavior(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "behavior" not in df.columns:
+        return df
+    normalized = df["behavior"].astype(str).str.strip().str.lower()
+    return df[normalized.ne("indeterminado")].copy()
+
+
 def _chart_icon_svg(kind: str) -> str:
     icons = {
         "summary": """
@@ -1046,7 +1053,7 @@ def list_behavior_filter_options(user_context: dict, filters: dict | None = None
 
 
 def df_behavior_charts(user_context: dict, filters: dict | None = None):
-    df = fetch_behavior_dataframe(user_context, filters=filters)
+    df = _exclude_indeterminate_behavior(fetch_behavior_dataframe(user_context, filters=filters))
     if df.empty:
         return pd.DataFrame(
             columns=[
@@ -1384,6 +1391,20 @@ def show_behavior_charts(user_context: dict):
     options = list_behavior_filter_options(user_context)
     filter_title = "Filtros do professor" if user_context["role"] == "professor" else "Filtros globais"
     state_prefix = "behavior_chart_filters"
+    student_placeholder_label = "Selecione um aluno"
+    reset_filters_key = f"{state_prefix}_reset_pending"
+    if st.session_state.pop(reset_filters_key, False):
+        today = datetime.date.today()
+        st.session_state[f"{state_prefix}_teacher_id"] = None
+        st.session_state[f"{state_prefix}_subject_id"] = None
+        st.session_state[f"{state_prefix}_class_id"] = None
+        st.session_state[f"{state_prefix}_student"] = None
+        st.session_state[f"{state_prefix}_date"] = today.isoformat()
+        st.session_state[f"{state_prefix}_teacher_choice"] = "Todos"
+        st.session_state[f"{state_prefix}_subject_choice"] = "Todas"
+        st.session_state[f"{state_prefix}_class_choice"] = "Todas"
+        st.session_state[f"{state_prefix}_student_choice"] = student_placeholder_label
+        st.session_state[f"{state_prefix}_date_choice"] = today
     selected_teacher_id = st.session_state.get(f"{state_prefix}_teacher_id")
     selected_subject_id = st.session_state.get(f"{state_prefix}_subject_id")
     selected_class_id = st.session_state.get(f"{state_prefix}_class_id")
@@ -1393,7 +1414,7 @@ def show_behavior_charts(user_context: dict):
     left_col, right_col = st.columns([2.55, 1], gap="large")
 
     def _render_charts_empty_state(title: str, message: str, student_label: str | None = None, date_label: str | None = None):
-        fallback_student = student_label or "Selecione um aluno"
+        fallback_student = student_label or student_placeholder_label
         fallback_date = date_label or pd.to_datetime(datetime.date.today()).strftime("%d/%m/%Y")
         with left_col:
             st.markdown(
@@ -1535,31 +1556,36 @@ def show_behavior_charts(user_context: dict):
                     pd.to_datetime(selected_date_state).strftime("%d/%m/%Y") if selected_date_state else None,
                 )
                 return
+            student_values = [student_placeholder_label] + student_options
             if selected_student_state not in student_options:
-                selected_student_state = student_options[0]
+                selected_student_state = student_placeholder_label
             selected_student = st.selectbox(
                 "Aluno",
-                student_options,
-                index=student_options.index(selected_student_state),
+                student_values,
+                index=student_values.index(selected_student_state),
                 key=f"{state_prefix}_student_choice",
             )
 
-            available_dates = (
-                fetch_behavior_dataframe(
-                    user_context,
-                    filters={
-                        "teacher_id": selected_teacher_id,
-                        "subject_id": selected_subject_id,
-                        "class_id": selected_class_id,
-                        "student_name": selected_student,
-                    },
-                )["date"]
-                .dropna()
-                .sort_values()
-                .unique()
-                .tolist()
-            )
-            default_date = pd.to_datetime(available_dates[-1]).date() if available_dates else datetime.date.today()
+            available_dates = []
+            if selected_student != student_placeholder_label:
+                available_dates = (
+                    _exclude_indeterminate_behavior(
+                        fetch_behavior_dataframe(
+                            user_context,
+                            filters={
+                                "teacher_id": selected_teacher_id,
+                                "subject_id": selected_subject_id,
+                                "class_id": selected_class_id,
+                                "student_name": selected_student,
+                            },
+                        )
+                    )["date"]
+                    .dropna()
+                    .sort_values()
+                    .unique()
+                    .tolist()
+                )
+            default_date = datetime.date.today()
             if selected_date_state is not None:
                 try:
                     selected_date_candidate = pd.to_datetime(selected_date_state).date()
@@ -1573,43 +1599,27 @@ def show_behavior_charts(user_context: dict):
                 key=f"{state_prefix}_date_choice",
             )
 
-            button_col1, button_col2 = st.columns(2, gap="small")
-            with button_col1:
-                apply_filters = st.button("Aplicar Filtros", type="primary", use_container_width=True)
-            with button_col2:
-                clear_filters = st.button("Limpar Filtros", use_container_width=True)
+            clear_filters = st.button("Limpar Filtros", use_container_width=True)
 
             if clear_filters:
-                for key in (
-                    f"{state_prefix}_teacher_id",
-                    f"{state_prefix}_subject_id",
-                    f"{state_prefix}_class_id",
-                    f"{state_prefix}_student",
-                    f"{state_prefix}_date",
-                    f"{state_prefix}_teacher_choice",
-                    f"{state_prefix}_subject_choice",
-                    f"{state_prefix}_class_choice",
-                    f"{state_prefix}_student_choice",
-                    f"{state_prefix}_date_choice",
-                ):
-                    st.session_state.pop(key, None)
+                st.session_state[reset_filters_key] = True
                 st.rerun()
 
-            if apply_filters or f"{state_prefix}_student" not in st.session_state:
-                st.session_state[f"{state_prefix}_teacher_id"] = selected_teacher_id
-                st.session_state[f"{state_prefix}_subject_id"] = selected_subject_id
-                st.session_state[f"{state_prefix}_class_id"] = selected_class_id
-                st.session_state[f"{state_prefix}_student"] = selected_student
-                st.session_state[f"{state_prefix}_date"] = selected_date.isoformat()
+            st.session_state[f"{state_prefix}_teacher_id"] = selected_teacher_id
+            st.session_state[f"{state_prefix}_subject_id"] = selected_subject_id
+            st.session_state[f"{state_prefix}_class_id"] = selected_class_id
+            st.session_state[f"{state_prefix}_student"] = None if selected_student == student_placeholder_label else selected_student
+            st.session_state[f"{state_prefix}_date"] = selected_date.isoformat()
 
             selected_teacher_id = st.session_state.get(f"{state_prefix}_teacher_id")
             selected_subject_id = st.session_state.get(f"{state_prefix}_subject_id")
             selected_class_id = st.session_state.get(f"{state_prefix}_class_id")
-            selected_student = st.session_state.get(f"{state_prefix}_student", selected_student)
+            selected_student = st.session_state.get(f"{state_prefix}_student") or student_placeholder_label
             selected_date = pd.to_datetime(st.session_state.get(f"{state_prefix}_date", selected_date.isoformat())).date()
 
             applied_subject = subject_choice if selected_subject_id else "Todas"
             applied_class = class_choice if selected_class_id else "Todas"
+            applied_student = selected_student if selected_student != student_placeholder_label else "Nenhum aluno selecionado"
 
             st.markdown(
                 f"""
@@ -1618,7 +1628,7 @@ def show_behavior_charts(user_context: dict):
                     <div class="charts-applied-title">Filtros aplicados</div>
                     <div class="charts-applied-row"><span>Disciplina:</span><span>{applied_subject}</span></div>
                     <div class="charts-applied-row"><span>Turma:</span><span>{applied_class}</span></div>
-                    <div class="charts-applied-row"><span>Aluno:</span><span>{selected_student}</span></div>
+                    <div class="charts-applied-row"><span>Aluno:</span><span>{applied_student}</span></div>
                     <div class="charts-applied-row"><span>Data:</span><span>{pd.to_datetime(selected_date).strftime("%d/%m/%Y")}</span></div>
                 </div>
                 """,
@@ -1629,22 +1639,33 @@ def show_behavior_charts(user_context: dict):
             """
             <div class="charts-tip-card">
                 <div class="charts-tip-title">Dica</div>
-                Selecione os filtros desejados e clique em <strong>Aplicar Filtros</strong> para atualizar os gráficos.
+                Os gráficos são atualizados automaticamente sempre que você altera um filtro.
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    df = fetch_behavior_dataframe(
-        user_context,
-        filters={
-            "teacher_id": selected_teacher_id,
-            "subject_id": selected_subject_id,
-            "class_id": selected_class_id,
-            "student_name": selected_student,
-            "start_date": selected_date,
-            "end_date": selected_date,
-        },
+    if selected_student == student_placeholder_label:
+        _render_charts_empty_state(
+            "Selecione um aluno",
+            "Escolha um aluno para visualizar os gráficos comportamentais do período.",
+            "Nenhum aluno selecionado",
+            pd.to_datetime(selected_date).strftime("%d/%m/%Y"),
+        )
+        return
+
+    df = _exclude_indeterminate_behavior(
+        fetch_behavior_dataframe(
+            user_context,
+            filters={
+                "teacher_id": selected_teacher_id,
+                "subject_id": selected_subject_id,
+                "class_id": selected_class_id,
+                "student_name": selected_student,
+                "start_date": selected_date,
+                "end_date": selected_date,
+            },
+        )
     )
     if df.empty:
         _render_charts_empty_state(
@@ -1672,14 +1693,16 @@ def show_behavior_charts(user_context: dict):
     df_temporal["start_time"] = pd.to_datetime(df_temporal["start_time"])
     df_temporal["end_time"] = pd.to_datetime(df_temporal["end_time"])
 
-    df_context = fetch_behavior_dataframe(
-        user_context,
-        filters={
-            "teacher_id": selected_teacher_id,
-            "subject_id": selected_subject_id,
-            "class_id": selected_class_id,
-            "student_name": selected_student,
-        },
+    df_context = _exclude_indeterminate_behavior(
+        fetch_behavior_dataframe(
+            user_context,
+            filters={
+                "teacher_id": selected_teacher_id,
+                "subject_id": selected_subject_id,
+                "class_id": selected_class_id,
+                "student_name": selected_student,
+            },
+        )
     )
     df_context_share = pd.DataFrame(columns=["lesson_type", "behavior", "total_seconds", "share_percentage"])
     if not df_context.empty:
@@ -1866,7 +1889,7 @@ def show_behavior_charts(user_context: dict):
                 <div class="charts-chip">
                     <span>📅</span>
                     <span>Análise para:</span>
-                    <strong>{selected_student}</strong>
+                    <strong>{"Nenhum aluno selecionado" if selected_student == student_placeholder_label else selected_student}</strong>
                     <span class="charts-chip-dot">●</span>
                     <span>{data_formatada}</span>
                 </div>

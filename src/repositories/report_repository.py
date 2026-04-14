@@ -14,4 +14,9 @@ def list_report_students(user_context: dict, filters: dict | None = None) -> pd.
 
 
 def fetch_behavior_episodes(user_context: dict, filters: dict) -> pd.DataFrame:
-    return fetch_behavior_dataframe(user_context, filters=filters)
+    df = fetch_behavior_dataframe(user_context, filters=filters)
+    if df.empty or "behavior" not in df.columns:
+        return df
+
+    normalized_behavior = df["behavior"].astype(str).str.strip().str.lower()
+    return df[normalized_behavior.ne("indeterminado")].copy()

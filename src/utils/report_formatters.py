@@ -25,13 +25,13 @@ PRIORITY_HIGH_FILL = colors.HexColor("#FDEEEE")
 WHITE = colors.white
 
 BEHAVIOR_PDF_COLORS = {
-    "Atento": "#3B82F6",
+    "Atento": "#60A5FA",
     "Distraido": "#F28C52",
     "Distraído": "#F28C52",
-    "Perguntando": "#2563EB",
+    "Perguntando": "#1D4ED8",
     "Escrevendo": "#2F855A",
     "Dormindo": "#8B5FBF",
-    "Agitado": "#F6AD55",
+    "Agitado": "#D97706",
     "Em Pé": "#94A3B8",
 }
 
@@ -79,6 +79,16 @@ def _get_behavior_row(summary: pd.DataFrame, behavior_name: str):
     if row.empty:
         return None
     return row.iloc[0]
+
+
+def _get_predominant_behavior_row(summary: pd.DataFrame):
+    if summary.empty:
+        return None
+    ordered = summary.sort_values(
+        ["duration_percentage", "occurrence_percentage", "records", "behavior"],
+        ascending=[False, False, False, True],
+    )
+    return ordered.iloc[0]
 
 
 def _behavior_color(behavior: str) -> str:
@@ -264,8 +274,12 @@ def build_observational_summary(report_data: dict) -> str:
             "Não houve registros suficientes para compor uma síntese observacional do período selecionado."
         )
 
-    top_behavior = summary.iloc[0]
-    second_behavior = summary.iloc[1] if len(summary) > 1 else None
+    top_behavior = _get_predominant_behavior_row(summary)
+    secondary_summary = summary[summary["behavior"] != top_behavior["behavior"]]
+    second_behavior = None if secondary_summary.empty else secondary_summary.sort_values(
+        ["duration_percentage", "occurrence_percentage", "records", "behavior"],
+        ascending=[False, False, False, True],
+    ).iloc[0]
     temporal_rows = _build_temporal_segment_rows(report_data)
     text = (
         f"No período analisado, observou-se predomínio do comportamento {str(top_behavior['behavior']).lower()}. "
@@ -299,7 +313,7 @@ def generate_interpretive_summary(report_data: dict) -> str:
     if summary.empty:
         return "Não houve base suficiente para uma leitura interpretativa do período."
 
-    top_behavior = summary.iloc[0]
+    top_behavior = _get_predominant_behavior_row(summary)
     top_behavior_name = str(top_behavior["behavior"]).lower()
     consistency_row = consistency[consistency["behavior"] == top_behavior["behavior"]]
     consistency_text = ""
@@ -332,6 +346,7 @@ def generate_interpretive_summary(report_data: dict) -> str:
 def generate_temporal_distribution_summary(report_data: dict) -> str:
     rows = _build_temporal_segment_rows(report_data)
     segment_distribution = report_data["session_segment_distribution"]
+    summary = report_data["behavior_summary"]
     if not rows or segment_distribution.empty:
         return "Não houve base temporal suficiente para uma síntese da aula."
 
@@ -341,6 +356,22 @@ def generate_temporal_distribution_summary(report_data: dict) -> str:
         .sort_values(["records", "total_duration_seconds"], ascending=[False, False])
         .iloc[0]["behavior"]
     )
+    predominant_row = _get_predominant_behavior_row(summary)
+    predominant_behavior = None if predominant_row is None else str(predominant_row["behavior"])
+    negative_behaviors = {"Distraído", "Distraido", "Agitado", "Dormindo"}
+
+    if (
+        predominant_behavior is not None
+        and str(predominant_behavior).lower() == "atento"
+        and str(top_segment_behavior) in negative_behaviors
+    ):
+        return (
+            f"Embora o comportamento geral tenha sido {str(predominant_behavior).lower()}, "
+            f"no {top_segment['label'].lower()} houve maior concentração de registros de "
+            f"{str(top_segment_behavior).lower()}. "
+            "Esse contraste sugere atenção pedagógica a esse trecho da aula e acompanhamento em novas observações."
+        )
+
     if top_segment["share"] >= 45:
         return (
             f"Os registros se concentraram principalmente no {top_segment['label'].lower()}, "
@@ -360,7 +391,7 @@ def generate_consistency_summary(report_data: dict) -> str:
     if consistency.empty or summary.empty:
         return "Não houve base suficiente para avaliar a consistência do comportamento no período."
 
-    predominant_behavior = summary.iloc[0]["behavior"]
+    predominant_behavior = _get_predominant_behavior_row(summary)["behavior"]
     predominant_row = consistency[consistency["behavior"] == predominant_behavior].iloc[0]
     label = str(predominant_row["consistency_label"]).lower()
     if "regular" in label:
@@ -582,7 +613,10 @@ def build_report_pdf(report_data: dict) -> bytes:
         card_height = 90
         card_y = cursor_y - card_height
 
-        predominant_behavior = str(metrics["predominant_behavior"])
+        predominant_row = _get_predominant_behavior_row(summary)
+        predominant_behavior = str(
+            predominant_row["behavior"] if predominant_row is not None else metrics["predominant_behavior"]
+        )
         cards = [
             ("Comportamento predominante", predominant_behavior),
             ("Tempo total observado", format_duration_minutes_label(metrics["total_duration_seconds"])),
