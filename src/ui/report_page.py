@@ -682,6 +682,9 @@ def _inject_report_top_styles() -> None:
             box-shadow: 0 16px 36px rgba(0,0,0,0.18);
             margin: 0 0 0.2rem 0;
         }
+        .report-action-align {
+            margin-top: 3.8rem;
+        }
         .report-action-eyebrow {
             font-size: 0.8rem;
             letter-spacing: 0.08em;
@@ -1494,38 +1497,60 @@ def render_report_page(user_context: dict):
                         "class_id": selected_class_id,
                     },
                 )
+                student_placeholder = "Selecione um aluno"
                 student_options = filtered_students_df["student"].tolist()
                 if not student_options:
                     st.warning("Não há alunos com episódios para os filtros selecionados.")
                     return
-                selected_student = st.selectbox("Aluno", student_options, index=0)
+                student_values = [student_placeholder] + student_options
+                selected_student = st.selectbox("Aluno", student_values, index=0)
 
             controls_col5, controls_col6 = st.columns([0.9, 1.4], gap="small")
             with controls_col5:
-                period_mode = st.selectbox("Período", ["Diário", "Semanal", "Mensal"], index=0)
+                period_placeholder = "Selecione um período"
+                period_values = [period_placeholder, "Diário", "Semanal", "Mensal"]
+                period_mode = st.selectbox("Período", period_values, index=0)
             with controls_col6:
-                start_default, end_default = _default_range(period_mode)
-                student_last_date = _get_student_last_date(filtered_students_df, selected_student)
-                if period_mode == "Diário":
-                    selected_date = st.date_input("Data de referência", value=student_last_date or end_default)
-                    start_date = selected_date
-                    end_date = selected_date
+                today = date.today()
+                if period_mode == period_placeholder:
+                    st.date_input("Data de referência", value=today, disabled=True)
+                    start_date = today
+                    end_date = today
                 else:
-                    selected_range = st.date_input(
-                        "Intervalo de datas",
-                        value=(
-                            start_default,
-                            student_last_date or end_default,
-                        ),
+                    start_default, end_default = _default_range(period_mode)
+                    student_last_date = (
+                        _get_student_last_date(filtered_students_df, selected_student)
+                        if selected_student != student_placeholder
+                        else None
                     )
+                    if period_mode == "Diário":
+                        selected_date = st.date_input("Data de referência", value=today)
+                        start_date = selected_date
+                        end_date = selected_date
+                    else:
+                        selected_range = st.date_input(
+                            "Intervalo de datas",
+                            value=(
+                                start_default,
+                                today,
+                            ),
+                        )
 
-                    if not isinstance(selected_range, (list, tuple)) or len(selected_range) != 2:
-                        st.info("Selecione uma data inicial e uma data final para gerar o relatório.")
-                        return
+                        if not isinstance(selected_range, (list, tuple)) or len(selected_range) != 2:
+                            st.info("Selecione uma data inicial e uma data final para gerar o relatório.")
+                            return
 
-                    start_date, end_date = selected_range
+                        start_date, end_date = selected_range
         with top_col_right:
             top_actions_placeholder = st.empty()
+
+    if selected_student == student_placeholder:
+        st.info("Selecione um aluno para visualizar o relatório.")
+        return
+
+    if period_mode == period_placeholder:
+        st.info("Selecione um período para visualizar o relatório.")
+        return
 
     if start_date > end_date:
         st.error("A data inicial não pode ser maior que a data final.")
@@ -1581,6 +1606,7 @@ def render_report_page(user_context: dict):
     concise_comparison_lines = previous_period_lines[:3]
 
     with top_actions_placeholder.container():
+        st.markdown("<div class='report-action-align'></div>", unsafe_allow_html=True)
         _render_report_export_actions(
             report_data=report_data,
             display_summary=display_summary,
