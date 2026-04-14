@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from services.report_service import generate_report_data, get_available_filters, get_available_students
@@ -44,6 +45,19 @@ HIGHLIGHT_CARD_STYLES = {
 
 DEFAULT_CLASS_START = pd.Timestamp("2000-01-01 08:00:00")
 DEFAULT_CLASS_END = pd.Timestamp("2000-01-01 11:40:00")
+
+BEHAVIOR_SIGNAL_PRIORITY_COLORS = {
+    "Baixa prioridade": "#4CAF50",
+    "Atenção moderada": "#FBC02D",
+    "Alta prioridade": "#E53935",
+}
+
+MANAGEMENT_CATEGORY_COLORS = {
+    "Engajamento na atividade": "#43A047",
+    "Participação ativa": "#1E88E5",
+    "Sinais de atenção pedagógica": "#FB8C00",
+    "Movimento e transição": "#7F8C8D",
+}
 
 
 def _default_range(period_mode: str):
@@ -282,6 +296,168 @@ def _format_duration_br(total_seconds: float) -> str:
     if minutes:
         return f"{minutes} min {seconds} s"
     return f"{seconds} s"
+
+
+def _behavior_share_map(summary_df: pd.DataFrame) -> dict[str, float]:
+    if summary_df.empty:
+        return {}
+    return {
+        str(row["behavior"]): float(row["duration_percentage"])
+        for _, row in summary_df.iterrows()
+    }
+
+
+def _build_management_balance_df(summary_df: pd.DataFrame) -> pd.DataFrame:
+    behavior_share = _behavior_share_map(summary_df)
+    rows = [
+        {
+            "group": "Engajamento na atividade",
+            "share_percentage": round(
+                behavior_share.get("Atento", 0.0) + behavior_share.get("Escrevendo", 0.0),
+                2,
+            ),
+        },
+        {
+            "group": "Participação ativa",
+            "share_percentage": round(behavior_share.get("Perguntando", 0.0), 2),
+        },
+        {
+            "group": "Sinais de atenção pedagógica",
+            "share_percentage": round(
+                behavior_share.get("Distraído", 0.0)
+                + behavior_share.get("Distraido", 0.0)
+                + behavior_share.get("Dormindo", 0.0)
+                + behavior_share.get("Agitado", 0.0),
+                2,
+            ),
+        },
+        {
+            "group": "Movimento e transição",
+            "share_percentage": round(behavior_share.get("Em Pé", 0.0), 2),
+        },
+    ]
+    balance_df = pd.DataFrame(rows)
+    balance_df = balance_df[balance_df["share_percentage"] > 0].copy()
+    if balance_df.empty:
+        return pd.DataFrame(columns=["group", "share_percentage"])
+    return balance_df.sort_values("share_percentage", ascending=False).reset_index(drop=True)
+
+
+def _signal_priority_label(share_percentage: float) -> str:
+    if share_percentage >= 20:
+        return "Alta prioridade"
+    if share_percentage >= 8:
+        return "Atenção moderada"
+    return "Baixa prioridade"
+
+
+def _build_signal_priority_df(summary_df: pd.DataFrame) -> pd.DataFrame:
+    behavior_share = _behavior_share_map(summary_df)
+    rows = [
+        {
+            "signal": "Dispersão atencional",
+            "share_percentage": round(
+                behavior_share.get("Distraído", 0.0) + behavior_share.get("Distraido", 0.0),
+                2,
+            ),
+            "guidance": "Reforçar instruções curtas, mediação por proximidade e retomadas de foco.",
+        },
+        {
+            "signal": "Sonolência observada",
+            "share_percentage": round(behavior_share.get("Dormindo", 0.0), 2),
+            "guidance": "Verificar rotina, horário da aula e necessidade de acolhimento individual.",
+        },
+        {
+            "signal": "Agitação e regulação",
+            "share_percentage": round(behavior_share.get("Agitado", 0.0), 2),
+            "guidance": "Planejar pausas, blocos curtos de tarefa e apoio socioemocional.",
+        },
+        {
+            "signal": "Movimento fora da tarefa",
+            "share_percentage": round(behavior_share.get("Em Pé", 0.0), 2),
+            "guidance": "Observar gatilhos do deslocamento e revisar organização da atividade.",
+        },
+    ]
+    signal_df = pd.DataFrame(rows)
+    signal_df["priority"] = signal_df["share_percentage"].apply(_signal_priority_label)
+    signal_df = signal_df[signal_df["share_percentage"] > 0].copy()
+    if signal_df.empty:
+        return pd.DataFrame(columns=["signal", "share_percentage", "priority", "guidance"])
+    return signal_df.sort_values("share_percentage", ascending=False).reset_index(drop=True)
+
+
+def _build_segment_heatmap_df(segment_distribution_df: pd.DataFrame) -> pd.DataFrame:
+    if segment_distribution_df.empty:
+        return pd.DataFrame()
+
+    grouped = segment_distribution_df.copy()
+    grouped["category"] = grouped["behavior"].map(
+        {
+            "Atento": "Engajamento na atividade",
+            "Escrevendo": "Engajamento na atividade",
+            "Perguntando": "Participação ativa",
+            "Distraído": "Sinais de atenção pedagógica",
+            "Distraido": "Sinais de atenção pedagógica",
+            "Dormindo": "Sinais de atenção pedagógica",
+            "Agitado": "Sinais de atenção pedagógica",
+            "Em Pé": "Movimento e transição",
+        }
+    ).fillna("Movimento e transição")
+
+    grouped = (
+        grouped.groupby(["session_segment", "category"], as_index=False)["total_duration_seconds"]
+        .sum()
+        .rename(columns={"total_duration_seconds": "total_seconds"})
+    )
+    grouped["segment_total_seconds"] = grouped.groupby("session_segment")["total_seconds"].transform("sum")
+    grouped["share_percentage"] = (
+        grouped["total_seconds"] / grouped["segment_total_seconds"].clip(lower=1.0) * 100.0
+    ).round(2)
+
+    ordered_segments = ["Início da aula", "Meio da aula", "Final da aula"]
+    ordered_categories = [
+        "Engajamento na atividade",
+        "Participação ativa",
+        "Sinais de atenção pedagógica",
+        "Movimento e transição",
+    ]
+    heatmap_df = (
+        grouped.pivot(index="session_segment", columns="category", values="share_percentage")
+        .reindex(index=ordered_segments, columns=ordered_categories)
+        .fillna(0.0)
+    )
+    return heatmap_df
+
+
+def _build_daily_management_trend_df(daily_distribution_df: pd.DataFrame) -> pd.DataFrame:
+    if daily_distribution_df.empty:
+        return pd.DataFrame(columns=["date", "date_label", "dimension", "share_percentage"])
+
+    grouped = daily_distribution_df.copy()
+    grouped["dimension"] = grouped["behavior"].map(
+        {
+            "Atento": "Engajamento",
+            "Escrevendo": "Engajamento",
+            "Perguntando": "Participação",
+            "Distraído": "Sinais de atenção",
+            "Distraido": "Sinais de atenção",
+            "Dormindo": "Sinais de atenção",
+            "Agitado": "Sinais de atenção",
+            "Em Pé": "Movimento",
+        }
+    ).fillna("Movimento")
+    grouped = (
+        grouped.groupby(["date", "dimension"], as_index=False)["total_duration_seconds"]
+        .sum()
+        .rename(columns={"total_duration_seconds": "total_seconds"})
+    )
+    grouped["day_total_seconds"] = grouped.groupby("date")["total_seconds"].transform("sum")
+    grouped["share_percentage"] = (
+        grouped["total_seconds"] / grouped["day_total_seconds"].clip(lower=1.0) * 100.0
+    ).round(2)
+    grouped["date"] = pd.to_datetime(grouped["date"])
+    grouped["date_label"] = grouped["date"].dt.strftime("%d/%m")
+    return grouped.sort_values(["date", "dimension"]).reset_index(drop=True)
 
 
 def _get_timeline_dtick_ms(span_minutes: float) -> int:
@@ -1415,6 +1591,10 @@ def render_report_page(user_context: dict):
         )
 
     predominant_share = float(summary_df.iloc[0]["duration_percentage"]) if not summary_df.empty else 0.0
+    management_balance_df = _build_management_balance_df(summary_df)
+    signal_priority_df = _build_signal_priority_df(summary_df)
+    segment_heatmap_df = _build_segment_heatmap_df(report_data["session_segment_distribution"])
+    daily_management_trend_df = _build_daily_management_trend_df(report_data["daily_distribution"])
     total_records_subtitle = (
         f"{metrics['total_records']} episódio registrado"
         if metrics["total_records"] == 1
@@ -1484,7 +1664,88 @@ def render_report_page(user_context: dict):
     fig_duration.update_traces(texttemplate="%{text:.2f}", textposition="outside")
     fig_duration.update_layout(margin=dict(l=10, r=10, t=50, b=10), showlegend=False)
 
+    fig_management_balance = None
+    if not management_balance_df.empty:
+        fig_management_balance = px.pie(
+            management_balance_df,
+            values="share_percentage",
+            names="group",
+            hole=0.55,
+            color="group",
+            title="Balanço observacional do período",
+            color_discrete_map=MANAGEMENT_CATEGORY_COLORS,
+        )
+        fig_management_balance.update_traces(
+            texttemplate="%{value:.1f}%",
+            textposition="inside",
+        )
+        fig_management_balance.update_layout(
+            margin=dict(l=10, r=10, t=50, b=10),
+            legend_title_text="Leitura gerencial",
+        )
+
+    fig_signal_priority = None
+    if not signal_priority_df.empty:
+        fig_signal_priority = px.bar(
+            signal_priority_df.sort_values("share_percentage", ascending=True),
+            x="share_percentage",
+            y="signal",
+            orientation="h",
+            color="priority",
+            text="share_percentage",
+            title="Sinais que mais pedem acompanhamento",
+            labels={
+                "share_percentage": "Percentual da duração (%)",
+                "signal": "Sinal observacional",
+                "priority": "Prioridade",
+            },
+            color_discrete_map=BEHAVIOR_SIGNAL_PRIORITY_COLORS,
+            custom_data=["guidance"],
+        )
+        fig_signal_priority.update_traces(
+            texttemplate="%{text:.1f}%",
+            textposition="outside",
+            hovertemplate=(
+                "<b>Sinal:</b> %{y}<br>"
+                "<b>Percentual:</b> %{x:.1f}%<br>"
+                "<b>Leitura sugerida:</b> %{customdata[0]}"
+                "<extra></extra>"
+            ),
+        )
+        fig_signal_priority.update_layout(
+            margin=dict(l=10, r=10, t=50, b=10),
+            xaxis=dict(ticksuffix="%"),
+        )
+
     fig_timeline = _build_timeline_figure(timeline_df)
+
+    fig_segment_heatmap = None
+    if not segment_heatmap_df.empty:
+        fig_segment_heatmap = go.Figure(
+            data=go.Heatmap(
+                z=segment_heatmap_df.values,
+                x=list(segment_heatmap_df.columns),
+                y=list(segment_heatmap_df.index),
+                colorscale=[
+                    [0.0, "#0B1F33"],
+                    [0.35, "#1E88E5"],
+                    [0.65, "#FBC02D"],
+                    [1.0, "#E53935"],
+                ],
+                colorbar=dict(title="% no trecho"),
+                hovertemplate=(
+                    "<b>Momento da aula:</b> %{y}<br>"
+                    "<b>Dimensão:</b> %{x}<br>"
+                    "<b>Participação no trecho:</b> %{z:.1f}%<extra></extra>"
+                ),
+            )
+        )
+        fig_segment_heatmap.update_layout(
+            title="Em que momento da aula os sinais aparecem",
+            margin=dict(l=10, r=10, t=50, b=10),
+            xaxis_title="Dimensão observada",
+            yaxis_title="Trecho da aula",
+        )
 
     fig_period = None
     if period_df["period_label"].nunique() > 1:
@@ -1500,8 +1761,34 @@ def render_report_page(user_context: dict):
         )
         fig_period.update_layout(margin=dict(l=10, r=10, t=50, b=10), legend_title_text="Comportamento")
 
+    fig_daily_management_trend = None
+    if not daily_management_trend_df.empty and daily_management_trend_df["date"].nunique() > 1:
+        fig_daily_management_trend = px.line(
+            daily_management_trend_df,
+            x="date",
+            y="share_percentage",
+            color="dimension",
+            markers=True,
+            title="Tendência observacional ao longo dos dias",
+            labels={
+                "date": "Data",
+                "share_percentage": "Percentual da duração (%)",
+                "dimension": "Dimensão",
+            },
+            color_discrete_map={
+                "Engajamento": "#43A047",
+                "Participação": "#1E88E5",
+                "Sinais de atenção": "#FB8C00",
+                "Movimento": "#7F8C8D",
+            },
+        )
+        fig_daily_management_trend.update_layout(
+            margin=dict(l=10, r=10, t=50, b=10),
+            yaxis=dict(ticksuffix="%"),
+        )
+
     tabs = st.tabs(
-        ["Visão Geral", "Frequência e Duração", "Distribuição Temporal", "Comparações"]
+        ["Visão Geral", "Indicadores Gerenciais", "Distribuição Temporal", "Comparações"]
     )
 
     with tabs[0]:
@@ -1530,31 +1817,62 @@ def render_report_page(user_context: dict):
             _render_attention_points(teacher_attention_points)
 
     with tabs[1]:
-        st.subheader("Frequência e Duração")
-        st.caption("Distribuição dos comportamentos observados e apoio visual de duração estimada.")
-        chart_col1, chart_col2 = st.columns([1.2, 1], gap="large")
+        st.subheader("Indicadores Gerenciais")
+        st.caption("Leitura visual voltada à gestão: equilíbrio geral, sinais prioritários e possíveis focos de intervenção.")
+        chart_col1, chart_col2 = st.columns([1.05, 1.2], gap="large")
         with chart_col1:
-            st.plotly_chart(fig_occurrence, width="stretch")
+            if fig_management_balance is not None:
+                st.plotly_chart(fig_management_balance, width="stretch")
+            else:
+                st.info("Não houve base suficiente para consolidar o balanço observacional.")
         with chart_col2:
-            st.plotly_chart(fig_duration, width="stretch")
-        with st.expander("Ver tabela consolidada de frequências", expanded=False):
+            if fig_signal_priority is not None:
+                st.plotly_chart(fig_signal_priority, width="stretch")
+            else:
+                st.info("Não foram observados sinais com volume suficiente para priorização visual.")
+
+        if not signal_priority_df.empty:
+            st.markdown("##### Encaminhamentos sugeridos para acompanhamento")
+            for _, row in signal_priority_df.head(3).iterrows():
+                st.markdown(
+                    f"- **{row['signal']}** ({row['priority']}): {row['guidance']}"
+                )
+
+        with st.expander("Ver distribuição detalhada por comportamento", expanded=False):
+            st.caption("Visual detalhado de frequência e duração, útil para leitura técnica do caso.")
+            chart_col1, chart_col2 = st.columns([1.2, 1], gap="large")
+            with chart_col1:
+                st.plotly_chart(fig_occurrence, width="stretch")
+            with chart_col2:
+                st.plotly_chart(fig_duration, width="stretch")
             st.dataframe(display_summary, width="stretch", hide_index=True)
 
     with tabs[2]:
         st.subheader("Distribuição Temporal")
-        st.caption("Linha do tempo dos episódios observados ao longo do período monitorado.")
-        st.plotly_chart(fig_timeline, width="stretch")
+        st.caption("Identifica em que momento da aula o padrão se intensifica e apoia decisões de intervenção pedagógica.")
+        chart_col1, chart_col2 = st.columns([1.2, 1], gap="large")
+        with chart_col1:
+            st.plotly_chart(fig_timeline, width="stretch")
+        with chart_col2:
+            if fig_segment_heatmap is not None:
+                st.plotly_chart(fig_segment_heatmap, width="stretch")
+            else:
+                st.info("Não houve base suficiente para comparar os trechos da aula.")
         st.info(short_temporal_summary or "Não houve base suficiente para sintetizar a leitura temporal.")
 
     with tabs[3]:
         st.subheader("Comparações")
-        st.caption("Síntese curta da comparação com o período anterior e, quando disponível, com recortes internos.")
+        st.caption("Comparação com o período anterior e evolução do comportamento ao longo do recorte selecionado.")
         st.markdown("##### Síntese Comparativa")
         if concise_comparison_lines:
             for line in concise_comparison_lines:
                 st.markdown(f"- {line}")
         else:
             st.info("Não há base comparativa suficiente para uma síntese resumida.")
+
+        if fig_daily_management_trend is not None:
+            st.markdown("##### Tendência por Dia")
+            st.plotly_chart(fig_daily_management_trend, width="stretch")
 
         if fig_period is not None:
             st.markdown("##### Comparação entre Recortes do Período")

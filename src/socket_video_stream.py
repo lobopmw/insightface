@@ -1,4 +1,5 @@
 # socket_video_stream.py
+import select
 import socket, struct, threading, time
 import cv2, numpy as np
 
@@ -23,6 +24,8 @@ class VideoStream:
         self.frame_id = 0
         self._decoded_frame_id = -1
         self._socket_timeout_sec = 1.0
+        self._recv_buffer = bytearray()
+        self._max_payload_size = 8 * 1024 * 1024
 
     def _connect(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -46,18 +49,75 @@ class VideoStream:
             buf += chunk
         return buf
 
+    def _recv_into_buffer(self):
+        if self.sock is None:
+            return False
+
+        received_any = False
+        while True:
+            try:
+                ready, _, _ = select.select([self.sock], [], [], 0)
+            except Exception:
+                ready = []
+            if not ready:
+                break
+            try:
+                chunk = self.sock.recv(65536)
+            except BlockingIOError:
+                break
+            except socket.timeout:
+                break
+            except Exception:
+                return False
+            if not chunk:
+                return False
+            self._recv_buffer.extend(chunk)
+            received_any = True
+        return received_any
+
+    def _extract_latest_packet(self):
+        latest_payload = None
+        while len(self._recv_buffer) >= 4:
+            size = struct.unpack(">I", self._recv_buffer[:4])[0]
+            if size <= 0 or size > self._max_payload_size:
+                raise RuntimeError(f"payload_size_invalido:{size}")
+            total_size = 4 + size
+            if len(self._recv_buffer) < total_size:
+                break
+            latest_payload = bytes(self._recv_buffer[4:total_size])
+            del self._recv_buffer[:total_size]
+        return latest_payload
+
     def _reader(self):
         while self.running:
             try:
                 if self.sock is None:
                     self._connect()
-                hdr = self._recvall(4)
-                if not hdr: raise RuntimeError("header")
-                (size,) = struct.unpack(">I", hdr)
-                data = self._recvall(size)
-                if not data: raise RuntimeError("payload")
+
+                if len(self._recv_buffer) < 4:
+                    hdr = self._recvall(4)
+                    if not hdr:
+                        raise RuntimeError("header")
+                    self._recv_buffer.extend(hdr)
+
+                size = struct.unpack(">I", self._recv_buffer[:4])[0]
+                if size <= 0 or size > self._max_payload_size:
+                    raise RuntimeError(f"payload_size_invalido:{size}")
+
+                missing = (4 + size) - len(self._recv_buffer)
+                if missing > 0:
+                    data = self._recvall(missing)
+                    if not data:
+                        raise RuntimeError("payload")
+                    self._recv_buffer.extend(data)
+
+                self._recv_into_buffer()
+                latest_payload = self._extract_latest_packet()
+                if latest_payload is None:
+                    raise RuntimeError("payload")
+
                 with self.lock:
-                    self.frame_jpeg = bytes(data)
+                    self.frame_jpeg = latest_payload
                     self.frame = None
                     self._decoded_frame_id = -1
                     self.last_frame_at = time.time()
@@ -71,6 +131,7 @@ class VideoStream:
                 except Exception:
                     pass
                 self.sock = None
+                self._recv_buffer.clear()
                 time.sleep(self.reconnect_sec)
 
     def start(self):

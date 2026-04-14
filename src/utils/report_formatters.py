@@ -2,15 +2,44 @@ from __future__ import annotations
 
 import io
 import textwrap
+from datetime import datetime
 from xml.sax.saxutils import escape
 
 import pandas as pd
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_JUSTIFY
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 from reportlab.lib.styles import ParagraphStyle
+from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph
+
+TITLE_COLOR = colors.HexColor("#17324D")
+SUBTITLE_COLOR = colors.HexColor("#617285")
+TEXT_COLOR = colors.HexColor("#243746")
+MUTED_TEXT_COLOR = colors.HexColor("#6E7C8B")
+BORDER_COLOR = colors.HexColor("#D9E2EC")
+CARD_FILL = colors.HexColor("#F7FAFC")
+PRIORITY_LOW_FILL = colors.HexColor("#EDF7F1")
+PRIORITY_MEDIUM_FILL = colors.HexColor("#FFF6E8")
+PRIORITY_HIGH_FILL = colors.HexColor("#FDEEEE")
+WHITE = colors.white
+
+BEHAVIOR_PDF_COLORS = {
+    "Atento": "#3B82F6",
+    "Distraido": "#F28C52",
+    "Distraído": "#F28C52",
+    "Perguntando": "#2563EB",
+    "Escrevendo": "#2F855A",
+    "Dormindo": "#8B5FBF",
+    "Agitado": "#F6AD55",
+    "Em Pé": "#94A3B8",
+}
+
+TEMPORAL_SEGMENT_COLORS = {
+    "Início da aula": "#7CB4FF",
+    "Meio da aula": "#4F7FEA",
+    "Final da aula": "#274690",
+}
 
 
 def format_date_br(value) -> str:
@@ -30,12 +59,17 @@ def format_duration_human(total_seconds: float) -> str:
     return f"{seconds}s"
 
 
+def format_duration_minutes_label(total_seconds: float) -> str:
+    total_minutes = float(total_seconds or 0) / 60.0
+    return f"{total_minutes:.1f} min"
+
+
 def _classify_distribution_style(active_day_percentage: float, max_daily_share_percentage: float) -> str:
     if active_day_percentage >= 60 and max_daily_share_percentage <= 35:
-        return "distribuição regular"
+        return "estável ao longo do período"
     if active_day_percentage < 35 or max_daily_share_percentage >= 50:
-        return "distribuição concentrada em dias específicos"
-    return "distribuição intermediária"
+        return "mais concentrada em momentos específicos"
+    return "com oscilações moderadas"
 
 
 def _get_behavior_row(summary: pd.DataFrame, behavior_name: str):
@@ -47,41 +81,214 @@ def _get_behavior_row(summary: pd.DataFrame, behavior_name: str):
     return row.iloc[0]
 
 
+def _behavior_color(behavior: str) -> str:
+    return BEHAVIOR_PDF_COLORS.get(str(behavior), "#6B7280")
+
+
+def _build_behavior_distribution_rows(summary: pd.DataFrame) -> list[dict]:
+    if summary.empty:
+        return []
+    rows = []
+    for _, row in summary.iterrows():
+        rows.append(
+            {
+                "label": str(row["behavior"]),
+                "share": float(row["duration_percentage"]),
+                "minutes": float(row["duration_minutes"]),
+                "color": _behavior_color(str(row["behavior"])),
+            }
+        )
+    return rows
+
+
+def _build_management_balance_rows(summary: pd.DataFrame) -> list[dict]:
+    if summary.empty:
+        return []
+
+    behavior_share = {
+        str(row["behavior"]): float(row["duration_percentage"])
+        for _, row in summary.iterrows()
+    }
+    rows = [
+        {"label": "Engajamento", "value": behavior_share.get("Atento", 0.0) + behavior_share.get("Escrevendo", 0.0)},
+        {"label": "Participação", "value": behavior_share.get("Perguntando", 0.0)},
+        {
+            "label": "Sinais de atenção",
+            "value": (
+                behavior_share.get("Distraído", 0.0)
+                + behavior_share.get("Distraido", 0.0)
+                + behavior_share.get("Dormindo", 0.0)
+                + behavior_share.get("Agitado", 0.0)
+            ),
+        },
+        {"label": "Movimento", "value": behavior_share.get("Em Pé", 0.0)},
+    ]
+    colors_by_group = {
+        "Engajamento": "#3B82F6",
+        "Participação": "#2563EB",
+        "Sinais de atenção": "#F28C52",
+        "Movimento": "#94A3B8",
+    }
+    return [
+        {"label": row["label"], "value": round(float(row["value"]), 2), "color": colors_by_group[row["label"]]}
+        for row in rows
+        if float(row["value"]) > 0
+    ]
+
+
+def _build_temporal_segment_rows(report_data: dict) -> list[dict]:
+    segment_distribution = report_data["session_segment_distribution"]
+    if segment_distribution.empty:
+        return []
+
+    grouped = (
+        segment_distribution.groupby("session_segment", as_index=False)["records"]
+        .sum()
+    )
+    total_records = max(int(grouped["records"].sum()), 1)
+    ordered_segments = ["Início da aula", "Meio da aula", "Final da aula"]
+    rows = []
+    for segment in ordered_segments:
+        row = grouped[grouped["session_segment"] == segment]
+        records = int(row.iloc[0]["records"]) if not row.empty else 0
+        rows.append(
+            {
+                "label": segment,
+                "records": records,
+                "share": round(records / total_records * 100.0, 2),
+                "color": TEMPORAL_SEGMENT_COLORS[segment],
+            }
+        )
+    return rows
+
+
+def _build_comparison_rows(report_data: dict) -> list[dict]:
+    comparison = report_data["comparison"]
+    summary = report_data["behavior_summary"]
+    if comparison.empty or summary.empty or int(comparison["previous_records"].sum()) <= 0:
+        return []
+
+    focus_behaviors = summary["behavior"].head(3).tolist()
+    rows = []
+    for behavior in focus_behaviors:
+        row = comparison[comparison["behavior"] == behavior]
+        if row.empty:
+            continue
+        row = row.iloc[0]
+        previous_records = int(row["previous_records"])
+        current_records = int(row["current_records"])
+        if previous_records <= 0:
+            continue
+        delta = current_records - previous_records
+        delta_pct = (delta / previous_records) * 100.0
+        if delta > 0:
+            arrow = "↑"
+            tone = "aumento"
+            color = "#D97706"
+        elif delta < 0:
+            arrow = "↓"
+            tone = "redução"
+            color = "#2563EB"
+        else:
+            arrow = "→"
+            tone = "estabilidade"
+            color = "#64748B"
+        rows.append(
+            {
+                "behavior": behavior,
+                "current": current_records,
+                "previous": previous_records,
+                "delta_pct": abs(delta_pct),
+                "arrow": arrow,
+                "tone": tone,
+                "color": color,
+            }
+        )
+    return rows
+
+
+def _build_observational_priority(report_data: dict) -> dict[str, str]:
+    summary = report_data["behavior_summary"]
+    temporal_rows = _build_temporal_segment_rows(report_data)
+    if summary.empty:
+        return {
+            "label": "Baixa prioridade observacional",
+            "reason": "O volume de dados disponível é reduzido, o que recomenda leitura conservadora neste momento.",
+            "fill": PRIORITY_LOW_FILL,
+            "accent": "#2F855A",
+        }
+
+    attentive = _get_behavior_row(summary, "Atento")
+    distracted = _get_behavior_row(summary, "Distraído")
+    if distracted is None:
+        distracted = _get_behavior_row(summary, "Distraido")
+    agitated = _get_behavior_row(summary, "Agitado")
+    sleeping = _get_behavior_row(summary, "Dormindo")
+
+    attentive_share = float(attentive["duration_percentage"]) if attentive is not None else 0.0
+    attention_signal_share = 0.0
+    for row in [distracted, agitated, sleeping]:
+        if row is not None:
+            attention_signal_share += float(row["duration_percentage"])
+
+    top_temporal_share = max((float(row["share"]) for row in temporal_rows), default=0.0)
+
+    if attention_signal_share >= 25.0 or (attention_signal_share >= 18.0 and attentive_share < 45.0):
+        return {
+            "label": "Atenção observacional elevada",
+            "reason": "O conjunto de registros sugere presença relevante de comportamentos que pedem acompanhamento mais próximo em novas observações.",
+            "fill": PRIORITY_HIGH_FILL,
+            "accent": "#C53030",
+        }
+    if attention_signal_share >= 12.0 or top_temporal_share >= 50.0 or attentive_share < 60.0:
+        return {
+            "label": "Atenção observacional moderada",
+            "reason": "Os dados indicam oscilações que merecem leitura contextualizada e acompanhamento pedagógico em coletas futuras.",
+            "fill": PRIORITY_MEDIUM_FILL,
+            "accent": "#C05621",
+        }
+    return {
+        "label": "Baixa prioridade observacional",
+        "reason": "O período sugere predominância de engajamento, sem sinais fortes de atenção adicional neste recorte.",
+        "fill": PRIORITY_LOW_FILL,
+        "accent": "#2F855A",
+    }
+
+
 def build_observational_summary(report_data: dict) -> str:
     summary = report_data["behavior_summary"]
     metrics = report_data["headline_metrics"]
 
     if summary.empty:
         return (
-            "Não houve registros suficientes para o aluno e o período selecionados. "
-            "O sistema depende de episódios observacionais previamente persistidos."
+            "Não houve registros suficientes para compor uma síntese observacional do período selecionado."
         )
 
     top_behavior = summary.iloc[0]
     second_behavior = summary.iloc[1] if len(summary) > 1 else None
-    asking_row = _get_behavior_row(summary, "Perguntando")
-
+    temporal_rows = _build_temporal_segment_rows(report_data)
     text = (
-        f"No período analisado, o sistema registrou {metrics['total_records']} episódios observacionais em "
-        f"{metrics['active_days']} dia(s), com duração acumulada estimada de "
-        f"{format_duration_human(metrics['total_duration_seconds'])}. "
-        f"Os dados indicam maior frequência registrada de ocorrências classificadas como "
-        f"'{top_behavior['behavior']}', correspondendo a {top_behavior['occurrence_percentage']:.2f}% "
-        f"dos registros e a {top_behavior['duration_minutes']:.2f} minuto(s) acumulados."
+        f"No período analisado, observou-se predomínio do comportamento {str(top_behavior['behavior']).lower()}. "
+        f"Foram contabilizados {metrics['total_records']} episódios em {metrics['active_days']} dia(s), com "
+        f"tempo total observado de {format_duration_human(metrics['total_duration_seconds'])}."
     )
-    if second_behavior is not None:
+
+    if second_behavior is not None and float(second_behavior["duration_percentage"]) >= 10.0:
         text += (
-            f" Como ocorrência relativa subsequente, houve frequência registrada relevante de episódios "
-            f"classificados como '{second_behavior['behavior']}', com {second_behavior['occurrence_percentage']:.2f}% dos registros."
+            f" Também apareceram momentos de {str(second_behavior['behavior']).lower()}, o que indica variações "
+            "no modo de participação ao longo das aulas observadas."
         )
-    if asking_row is not None and asking_row["behavior"] not in {top_behavior["behavior"], second_behavior["behavior"] if second_behavior is not None else ""} and float(asking_row["occurrence_percentage"]) >= 15.0:
+
+    if temporal_rows:
+        top_segment = max(temporal_rows, key=lambda row: row["share"])
         text += (
-            f" Também houve recorrência registrada de ocorrências classificadas como 'Perguntando', "
-            f"com {asking_row['occurrence_percentage']:.2f}% dos registros do período."
+            f" A maior concentração de registros ocorreu no {top_segment['label'].lower()}, "
+            "o que ajuda a orientar o olhar pedagógico sobre esse trecho da aula."
         )
+
     text += (
-        " Trata-se de indicador observacional derivado de visão computacional. Os resultados devem ser interpretados "
-        "à luz do contexto pedagógico da aula e das condições de captação."
+        " Esses resultados devem ser lidos como apoio à análise pedagógica e sempre considerados à luz do contexto "
+        "da atividade, da dinâmica da turma e das condições de observação."
     )
     return text
 
@@ -89,284 +296,158 @@ def build_observational_summary(report_data: dict) -> str:
 def generate_interpretive_summary(report_data: dict) -> str:
     summary = report_data["behavior_summary"]
     consistency = report_data["behavior_consistency"]
-
     if summary.empty:
-        return "Não houve base suficiente para a leitura interpretativa do período."
+        return "Não houve base suficiente para uma leitura interpretativa do período."
 
     top_behavior = summary.iloc[0]
-    top_consistency = consistency[consistency["behavior"] == top_behavior["behavior"]]
-    if not top_consistency.empty:
-        row = top_consistency.iloc[0]
-        distribution_style = _classify_distribution_style(
-            float(row["active_day_percentage"]),
-            float(row["max_daily_share_percentage"]),
-        )
+    top_behavior_name = str(top_behavior["behavior"]).lower()
+    consistency_row = consistency[consistency["behavior"] == top_behavior["behavior"]]
+    consistency_text = ""
+    if not consistency_row.empty:
+        row = consistency_row.iloc[0]
         consistency_text = (
-            f"Foram observados padrões compatíveis com '{top_behavior['behavior']}' em {distribution_style}, com recorrência registrada em "
-            f"{int(row['days_with_occurrence'])} dia(s) do período."
-        )
-    else:
-        consistency_text = (
-            f"Houve maior frequência registrada de ocorrências classificadas como '{top_behavior['behavior']}' no período selecionado."
+            f"Esse padrão se manteve {_classify_distribution_style(float(row['active_day_percentage']), float(row['max_daily_share_percentage']))}."
         )
 
-    episodic_behaviors = []
-    if not consistency.empty:
-        episodic_behaviors = (
-            consistency[consistency["consistency_label"] == "Episódica"]["behavior"].head(2).tolist()
-        )
+    distractions = []
+    for name in ["Distraído", "Distraido", "Agitado", "Dormindo"]:
+        row = _get_behavior_row(summary, name)
+        if row is not None and float(row["duration_percentage"]) >= 8.0:
+            distractions.append(str(name).lower())
 
-    episodic_text = ""
-    if episodic_behaviors:
-        names = ", ".join(f"'{name}'" for name in episodic_behaviors)
-        episodic_text = (
-            f" Também foram observados padrões compatíveis com {names} de forma mais episódica ou concentrada, "
-            "o que recomenda uma leitura contextualizada das aulas correspondentes."
-        )
-
-    pedagogical_text = ""
-    asking_row = _get_behavior_row(summary, "Perguntando")
-    if (
-        asking_row is not None
-        and float(top_behavior["occurrence_percentage"]) >= 35.0
-        and float(asking_row["occurrence_percentage"]) >= 12.0
-    ):
-        pedagogical_text = (
-            " Os registros também sugerem alternância entre acompanhamento contínuo da aula e momentos de "
-            "interação observacionalmente classificados pelo sistema, sempre devendo essa leitura ser situada "
-            "no contexto pedagógico do período analisado."
+    variation_text = ""
+    if distractions:
+        variation_text = (
+            f" Também foram identificados momentos de {', '.join(dict.fromkeys(distractions))}, "
+            "sugerindo oscilações de engajamento em partes do período."
         )
 
     return (
-        f"A leitura interpretativa do período indica predominância de padrões observacionais compatíveis com "
-        f"'{top_behavior['behavior']}' entre os registros produzidos pelo sistema. {consistency_text}{episodic_text} "
-        f"{pedagogical_text}"
-        "Esses resultados não devem ser analisados isoladamente, mas em conjunto com as "
-        "condições de aula, a dinâmica pedagógica e as características de captação."
-    )
+        f"O comportamento {top_behavior_name} predominou no período observado. "
+        f"{consistency_text} {variation_text} "
+        "Os resultados devem ser interpretados como apoio à análise pedagógica, sem finalidade diagnóstica."
+    ).strip()
 
 
 def generate_temporal_distribution_summary(report_data: dict) -> str:
+    rows = _build_temporal_segment_rows(report_data)
     segment_distribution = report_data["session_segment_distribution"]
+    if not rows or segment_distribution.empty:
+        return "Não houve base temporal suficiente para uma síntese da aula."
 
-    if segment_distribution.empty:
-        return (
-            "Não houve registros temporais suficientes para sintetizar a distribuição do período analisado."
-        )
-
-    overall = (
-        segment_distribution.groupby("session_segment", as_index=False)["records"]
-        .sum()
-        .sort_values("records", ascending=False)
-    )
-    top_segment = overall.iloc[0]
-    total_records = max(int(overall["records"].sum()), 1)
-    top_segment_percentage = float(top_segment["records"]) / total_records * 100.0
-
-    top_behavior_by_segment = (
-        segment_distribution[segment_distribution["session_segment"] == top_segment["session_segment"]]
+    top_segment = max(rows, key=lambda row: row["share"])
+    top_segment_behavior = (
+        segment_distribution[segment_distribution["session_segment"] == top_segment["label"]]
         .sort_values(["records", "total_duration_seconds"], ascending=[False, False])
-        .iloc[0]
+        .iloc[0]["behavior"]
     )
-
-    if top_segment_percentage >= 45:
-        distribution_style = f"maior concentração de registros no intervalo '{top_segment['session_segment']}'"
-        support_text = (
-            "a leitura temporal sugere concentração relativa nesse trecho do período observado"
+    if top_segment["share"] >= 45:
+        return (
+            f"Os registros se concentraram principalmente no {top_segment['label'].lower()}, "
+            f"momento em que houve maior presença de {str(top_segment_behavior).lower()}. "
+            "Esse padrão sugere observar com atenção a dinâmica didática desse trecho da aula."
         )
-    else:
-        distribution_style = "variação dos padrões ao longo do período observado"
-        support_text = (
-            "a leitura temporal sugere distribuição mais equilibrada dos registros ao longo da aula"
-        )
-
     return (
-        f"Na distribuição temporal do período, {support_text}. "
-        f"O segmento '{top_segment['session_segment']}' reuniu {top_segment_percentage:.2f}% dos registros, "
-        f"o que indica {distribution_style}. "
-        f"Neste recorte temporal, houve maior frequência registrada de ocorrências classificadas como "
-        f"'{top_behavior_by_segment['behavior']}'. "
-        "Essa distribuição deve ser analisada em conjunto com o planejamento pedagógico, "
-        "com o tipo de atividade desenvolvida e com as condições de observação."
+        "Os registros ficaram distribuídos de forma relativamente equilibrada entre os diferentes momentos da aula, "
+        f"com leve destaque para o {top_segment['label'].lower()}. "
+        "Essa distribuição sugere variação de engajamento ao longo da atividade."
     )
 
 
 def generate_consistency_summary(report_data: dict) -> str:
     consistency = report_data["behavior_consistency"]
     summary = report_data["behavior_summary"]
-
     if consistency.empty or summary.empty:
-        return "Não houve base suficiente para avaliar a consistência comportamental no período."
+        return "Não houve base suficiente para avaliar a consistência do comportamento no período."
 
     predominant_behavior = summary.iloc[0]["behavior"]
     predominant_row = consistency[consistency["behavior"] == predominant_behavior].iloc[0]
-
-    if predominant_row["consistency_label"] == "Regular":
-        main_text = (
-            f"Foram observados padrões compatíveis com '{predominant_behavior}' de forma regular ao longo dos dias observados, "
-            f"com recorrência registrada em {int(predominant_row['days_with_occurrence'])} dia(s)."
+    label = str(predominant_row["consistency_label"]).lower()
+    if "regular" in label:
+        return (
+            f"O comportamento {str(predominant_behavior).lower()} apareceu com boa constância ao longo do período, "
+            "o que sugere maior estabilidade no modo de participação."
         )
-    elif predominant_row["consistency_label"] == "Episódica":
-        main_text = (
-            f"Embora as ocorrências classificadas como '{predominant_behavior}' tenham predominado no agregado, sua recorrência registrada mostrou concentração "
-            f"em parte dos dias observados, com presença em {int(predominant_row['days_with_occurrence'])} dia(s)."
+    if "epis" in label:
+        return (
+            f"O comportamento {str(predominant_behavior).lower()} esteve presente no conjunto dos registros, "
+            "mas ficou mais concentrado em recortes específicos do período."
         )
-    else:
-        main_text = (
-            f"As ocorrências classificadas como '{predominant_behavior}' mantiveram predominância geral, com distribuição intermediária ao longo dos dias "
-            f"do período analisado."
-        )
-
-    episodic = consistency[consistency["consistency_label"] == "Episódica"]["behavior"].tolist()
-    episodic = [behavior for behavior in episodic if behavior != predominant_behavior][:2]
-    if episodic:
-        episodic_names = ", ".join("'" + behavior + "'" for behavior in episodic)
-        episodic_verb = "apareceu" if len(episodic) == 1 else "apareceram"
-        episodic_text = (
-            f" Em contrapartida, {episodic_names} "
-            f"{episodic_verb} de forma mais concentrada em dias específicos."
-        )
-    else:
-        episodic_text = ""
-
-    asking_text = ""
-    asking_row = _get_behavior_row(summary, "Perguntando")
-    if asking_row is not None and float(asking_row["occurrence_percentage"]) >= 12.0:
-        asking_consistency = consistency[consistency["behavior"] == "Perguntando"]
-        if not asking_consistency.empty:
-            asking_consistency = asking_consistency.iloc[0]
-            if asking_consistency["consistency_label"] == "Regular":
-                asking_text = (
-                    " Também houve recorrência registrada de ocorrências classificadas como 'Perguntando' em diferentes dias do período."
-                )
-            else:
-                asking_text = (
-                    " As ocorrências classificadas como 'Perguntando' também apareceram com relevância no agregado, "
-                    "embora com distribuição menos regular ao longo dos dias."
-                )
-
-    return main_text + episodic_text + asking_text
+    return (
+        f"O comportamento {str(predominant_behavior).lower()} manteve predominância geral, embora com oscilações "
+        "ao longo das observações."
+    )
 
 
 def generate_observational_attention_points(report_data: dict) -> list[str]:
-    points: list[str] = []
-    peak_days = report_data["peak_days"]
-    segment_distribution = report_data["session_segment_distribution"]
-    consistency = report_data["behavior_consistency"]
     summary = report_data["behavior_summary"]
+    temporal_rows = _build_temporal_segment_rows(report_data)
+    comparison_rows = _build_comparison_rows(report_data)
+    points: list[str] = []
 
-    if not peak_days.empty:
-        top_peak = peak_days.sort_values(["records", "duration_minutes"], ascending=[False, False]).iloc[0]
+    if not summary.empty:
+        distracted_row = _get_behavior_row(summary, "Distraído")
+        if distracted_row is None:
+            distracted_row = _get_behavior_row(summary, "Distraido")
+        asking_row = _get_behavior_row(summary, "Perguntando")
+        sleeping_row = _get_behavior_row(summary, "Dormindo")
+
+        if distracted_row is not None and float(distracted_row["duration_percentage"]) >= 10.0:
+            points.append("Presença de distração em parcela relevante do período observado.")
+        if sleeping_row is not None and float(sleeping_row["duration_percentage"]) >= 6.0:
+            points.append("Sinais de sonolência merecem leitura contextualizada da rotina e do tipo de atividade.")
+        if asking_row is not None and float(asking_row["duration_percentage"]) >= 8.0:
+            points.append("Há momentos de participação ativa que podem ser mobilizados em estratégias de engajamento.")
+
+    if temporal_rows:
+        top_segment = max(temporal_rows, key=lambda row: row["share"])
+        points.append(f"A maior concentração de registros ocorreu no {top_segment['label'].lower()}.")
+
+    if comparison_rows:
+        top_change = max(comparison_rows, key=lambda row: row["delta_pct"])
         points.append(
-            f"Foram observados picos de recorrência de '{top_peak['behavior']}' em "
-            f"{format_date_br(top_peak['date'])}, sugerindo a verificação do contexto da aula correspondente."
-        )
-
-    if not segment_distribution.empty:
-        top_segment = (
-            segment_distribution.groupby("session_segment", as_index=False)["records"]
-            .sum()
-            .sort_values("records", ascending=False)
-            .iloc[0]
-        )
-        points.append(
-            f"O segmento temporal '{top_segment['session_segment']}' concentrou a maior frequência registrada no período."
-        )
-
-    if not consistency.empty:
-        concentrated = consistency[consistency["consistency_label"] == "Episódica"]["behavior"].head(2).tolist()
-        if concentrated:
-            concentrated_names = ", ".join("'" + name + "'" for name in concentrated)
-            points.append(
-                f"Alguns indicadores observacionais, como {concentrated_names}, "
-                "apareceram de forma concentrada em recortes específicos, recomendando leitura articulada com o planejamento pedagógico."
-            )
-
-    asking_row = _get_behavior_row(summary, "Perguntando")
-    if asking_row is not None and float(asking_row["occurrence_percentage"]) >= 15.0:
-        points.append(
-            "Houve frequência registrada relevante de ocorrências classificadas como 'Perguntando', o que recomenda observação do contexto didático e da dinâmica de interação das aulas correspondentes."
+            f"Na comparação com o período anterior, {str(top_change['behavior']).lower()} apresentou a variação mais perceptível."
         )
 
     if not points:
         points.append(
-            "Não houve concentrações suficientemente destacadas para gerar pontos adicionais de atenção observacional."
+            "Os registros do período não indicaram concentrações suficientemente fortes para destacar novos pontos de atenção."
         )
 
-    return points
+    return points[:4]
 
 
 def generate_previous_period_comparison(report_data: dict) -> list[str]:
-    comparison = report_data["comparison"]
-    summary = report_data["behavior_summary"]
+    rows = _build_comparison_rows(report_data)
+    if not rows:
+        return ["Não houve registros suficientes no período anterior para uma comparação analítica consistente."]
 
-    if comparison.empty or summary.empty:
-        return ["Não há base comparativa suficiente para o período imediatamente anterior."]
-
-    valid_previous = comparison["previous_records"].sum()
-    if int(valid_previous) <= 0:
-        return ["Não houve registros suficientes no período imediatamente anterior para uma comparação analítica consistente."]
-
-    main_behaviors = summary["behavior"].head(3).tolist()
-    asking_row = _get_behavior_row(summary, "Perguntando")
-    if asking_row is not None and "Perguntando" not in main_behaviors and float(asking_row["occurrence_percentage"]) >= 12.0:
-        main_behaviors.append("Perguntando")
-    lines: list[str] = []
-    for behavior in main_behaviors:
-        row = comparison[comparison["behavior"] == behavior]
-        if row.empty:
-            continue
-        row = row.iloc[0]
-        current_records = int(row["current_records"])
-        previous_records = int(row["previous_records"])
-        delta = int(row["records_delta"])
-
-        if previous_records == 0:
+    lines = []
+    for row in rows:
+        if row["tone"] == "estabilidade":
             lines.append(
-                f"Para '{behavior}', não houve base suficiente no período anterior para estabelecer comparação direta."
+                f"{row['arrow']} {row['behavior']}: manteve estabilidade em relação ao período anterior."
             )
-            continue
-
-        if delta > 0:
-            if abs(delta) <= max(2, int(previous_records * 0.15)):
-                variation = "leve aumento na frequência"
-            else:
-                variation = "aumento mais perceptível na frequência"
-        elif delta < 0:
-            if abs(delta) <= max(2, int(previous_records * 0.15)):
-                variation = "leve redução na frequência"
-            else:
-                variation = "redução mais evidente na frequência"
         else:
-            variation = "estabilidade na frequência registrada"
-
-        predominance_clause = ""
-        if behavior == summary.iloc[0]["behavior"]:
-            predominance_clause = ", mantendo, contudo, predominância geral no padrão observado"
-
-        lines.append(
-            f"Em relação ao período anterior, as ocorrências classificadas como '{behavior}' apresentaram {variation}{predominance_clause}."
-        )
-
-    return lines or ["Não há base comparativa suficiente para o período imediatamente anterior."]
+            lines.append(
+                f"{row['arrow']} {row['behavior']}: {row['tone']} de {row['delta_pct']:.1f}% em relação ao período anterior."
+            )
+    return lines
 
 
 def generate_methodological_note() -> str:
     return (
-        "A duração acumulada estimada representa uma aproximação derivada da continuidade dos registros observacionais "
-        "persistidos entre os registros de início e término dos episódios. Essa medida pode sofrer impacto da taxa de "
-        "amostragem, de perdas momentâneas de detecção, de oclusões e de variações nas condições de captação, não "
-        "devendo ser interpretada como medição absoluta e contínua do comportamento."
+        "O tempo acumulado apresentado no relatório corresponde a uma estimativa construída a partir da duração dos episódios observados. "
+        "Essa medida pode variar em função da taxa de amostragem, de oclusões, de perdas momentâneas de detecção e das condições de captação. "
+        "Por isso, deve ser compreendida como referência analítica e não como medição absoluta do comportamento."
     )
 
 
 def build_limitations_text() -> str:
     return (
-        "As métricas apresentadas são indicadores observacionais derivados de reconhecimento facial, detecção de pose "
-        "e regras geométricas. O sistema é uma prova de conceito e pode sofrer impacto de variações de iluminação, "
-        "ângulo da câmera, oclusões, movimentação coletiva, perda de pontos-chave, qualidade do fluxo RTSP e contexto "
-        "pedagógico da aula. Os resultados não devem ser interpretados como diagnóstico ou avaliação clínica, mas como "
-        "apoio analítico para leitura temporal de recorrências observadas."
+        "As informações deste relatório são observacionais e derivadas de reconhecimento facial, detecção de pose e regras geométricas. "
+        "A plataforma pode ser influenciada por iluminação, enquadramento, movimentação coletiva, qualidade do fluxo de vídeo e contexto pedagógico. "
+        "Os resultados não constituem diagnóstico e devem ser utilizados exclusivamente como apoio à análise pedagógica e acadêmica."
     )
 
 
@@ -375,154 +456,369 @@ def build_report_pdf(report_data: dict) -> bytes:
     pdf = canvas.Canvas(pdf_buffer, pagesize=A4)
     width, height = A4
     margin_x = 42
-    top = height - 38
-    cursor_y = top
     usable_width = width - (margin_x * 2)
-    paragraph_style = ParagraphStyle(
-        "ReportBody",
+    page_top = height - 42
+    page_bottom = 36
+    cursor_y = page_top
+    page_number = 1
+
+    body_style = ParagraphStyle(
+        "Body",
         fontName="Helvetica",
         fontSize=10,
-        leading=15,
+        leading=14,
         alignment=TA_JUSTIFY,
-        textColor=colors.black,
+        textColor=TEXT_COLOR,
     )
+    small_style = ParagraphStyle(
+        "Small",
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=12,
+        alignment=TA_LEFT,
+        textColor=MUTED_TEXT_COLOR,
+    )
+
+    def draw_page_footer():
+        pdf.setStrokeColor(BORDER_COLOR)
+        pdf.setLineWidth(0.8)
+        pdf.line(margin_x, page_bottom + 10, margin_x + usable_width, page_bottom + 10)
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColor(MUTED_TEXT_COLOR)
+        pdf.drawString(margin_x, page_bottom - 2, "Plataforma de apoio observacional pedagógico")
+        pdf.drawRightString(margin_x + usable_width, page_bottom - 2, f"Página {page_number}")
 
     def next_page():
-        nonlocal cursor_y
+        nonlocal cursor_y, page_number
+        draw_page_footer()
         pdf.showPage()
-        cursor_y = top
+        page_number += 1
+        cursor_y = page_top
 
-    def ensure_space(required_height: int):
+    def ensure_space(required_height: float):
         nonlocal cursor_y
-        if cursor_y - required_height < 48:
+        if cursor_y - required_height < page_bottom + 26:
             next_page()
 
-    def write_line(text: str = "", font_name: str = "Helvetica", font_size: int = 10, color=colors.black):
-        nonlocal cursor_y
-        ensure_space(16)
-        pdf.setFont(font_name, font_size)
-        pdf.setFillColor(color)
-        pdf.drawString(margin_x, cursor_y, text[:120])
-        cursor_y -= 14
+    def ensure_section_space(min_total: float):
+        ensure_space(min_total)
 
-    def write_paragraph(text: str):
+    def write_paragraph(text: str, style: ParagraphStyle = body_style, after: float = 8):
         nonlocal cursor_y
-        safe_text = escape(text).replace("\n", "<br/>")
-        paragraph = Paragraph(safe_text, paragraph_style)
-        _, paragraph_height = paragraph.wrap(usable_width, top)
-        ensure_space(int(paragraph_height) + 4)
+        safe_text = escape(str(text)).replace("\n", "<br/>")
+        paragraph = Paragraph(safe_text, style)
+        _, paragraph_height = paragraph.wrap(usable_width, page_top)
+        ensure_space(paragraph_height + after)
         paragraph.drawOn(pdf, margin_x, cursor_y - paragraph_height)
-        cursor_y -= paragraph_height + 4
+        cursor_y -= paragraph_height + after
 
-    def write_section(title: str):
+    def write_bullets(lines: list[str], font_size: int = 10, bullet_color=TEXT_COLOR):
         nonlocal cursor_y
-        ensure_space(34)
-        pdf.setFont("Helvetica-Bold", 12)
-        pdf.setFillColor(colors.HexColor("#1F3B63"))
-        pdf.drawString(margin_x, cursor_y, title[:120])
-        cursor_y -= 8
-        pdf.setStrokeColor(colors.HexColor("#C9D2E3"))
-        pdf.setLineWidth(0.8)
-        pdf.line(margin_x, cursor_y, margin_x + usable_width, cursor_y)
-        cursor_y -= 14
-
-    def write_bullets(lines: list[str]):
         for line in lines:
-            wrapped = textwrap.wrap(line, width=100) or [""]
-            ensure_space(16 * max(len(wrapped), 1))
+            wrapped = textwrap.wrap(str(line), width=90) or [""]
+            ensure_space(16 * len(wrapped) + 2)
             first = True
             for wrapped_line in wrapped:
-                prefix = u"\u2022 " if first else "  "
-                write_line(f"{prefix}{wrapped_line}")
-                first = False
+                pdf.setFont("Helvetica", font_size)
+                pdf.setFillColor(TEXT_COLOR)
+                if first:
+                    pdf.setFillColor(bullet_color)
+                    pdf.drawString(margin_x, cursor_y, "•")
+                    pdf.setFillColor(TEXT_COLOR)
+                    pdf.drawString(margin_x + 12, cursor_y, wrapped_line)
+                    first = False
+                else:
+                    pdf.drawString(margin_x + 12, cursor_y, wrapped_line)
+                cursor_y -= 13
+            cursor_y -= 2
 
-    pdf.setTitle("Relatório Observacional de Padrões Comportamentais em Sala de Aula")
+    def write_section(title: str, min_following_space: float = 42):
+        nonlocal cursor_y
+        ensure_section_space(38 + min_following_space)
+        pdf.setFont("Helvetica-Bold", 14)
+        pdf.setFillColor(TITLE_COLOR)
+        pdf.drawString(margin_x, cursor_y, title[:120])
+        cursor_y -= 12
+        pdf.setStrokeColor(BORDER_COLOR)
+        pdf.setLineWidth(0.8)
+        pdf.line(margin_x, cursor_y, margin_x + usable_width, cursor_y)
+        cursor_y -= 24
 
-    write_line("Relatório Observacional de Padrões Comportamentais em Sala de Aula", "Helvetica-Bold", 15)
-    write_line(f"Aluno: {report_data['student']}", "Helvetica", 10)
-    write_line(
-        f"Período analisado: {format_date_br(report_data['start_date'])} a {format_date_br(report_data['end_date'])} | Recorte: {report_data['period_mode']}",
-        "Helvetica",
-        10,
-    )
-    write_line()
+    def draw_round_box(x: float, y: float, w: float, h: float, fill_color, stroke_color=BORDER_COLOR, radius: float = 10):
+        pdf.setFillColor(fill_color)
+        pdf.setStrokeColor(stroke_color)
+        pdf.roundRect(x, y, w, h, radius, fill=1, stroke=1)
+
+    def draw_header():
+        nonlocal cursor_y
+        title = "Relatório de Monitoramento Comportamental"
+        student = report_data.get("student") or "Aluno não informado"
+        period = f"{format_date_br(report_data['start_date'])} a {format_date_br(report_data['end_date'])}"
+        emitted = datetime.now().strftime("%d-%m-%Y")
+
+        ensure_space(108)
+        pdf.setFont("Helvetica-Bold", 20)
+        pdf.setFillColor(TITLE_COLOR)
+        pdf.drawString(margin_x, cursor_y, title)
+        cursor_y -= 22
+
+        pdf.setFont("Helvetica", 10.5)
+        pdf.setFillColor(SUBTITLE_COLOR)
+        pdf.drawString(margin_x, cursor_y, f"{student}  |  {period}  |  {report_data['period_mode']}")
+        cursor_y -= 14
+        pdf.drawString(margin_x, cursor_y, f"Emitido em: {emitted}")
+        cursor_y -= 18
+
+        pdf.setStrokeColor(BORDER_COLOR)
+        pdf.setLineWidth(1)
+        pdf.line(margin_x, cursor_y, margin_x + usable_width, cursor_y)
+        cursor_y -= 22
+
+    def draw_summary_cards(metrics: dict, summary: pd.DataFrame):
+        nonlocal cursor_y
+        ensure_space(126)
+        card_gap = 14
+        card_width = (usable_width - (card_gap * 3)) / 4
+        card_height = 90
+        card_y = cursor_y - card_height
+
+        predominant_behavior = str(metrics["predominant_behavior"])
+        cards = [
+            ("Comportamento predominante", predominant_behavior),
+            ("Tempo total observado", format_duration_minutes_label(metrics["total_duration_seconds"])),
+            ("Total de episódios", str(metrics["total_records"])),
+            ("Dias com registros", str(metrics["active_days"])),
+        ]
+
+        for index, (title, value) in enumerate(cards):
+            x = margin_x + index * (card_width + card_gap)
+            draw_round_box(x, card_y, card_width, card_height, CARD_FILL)
+            title_lines = textwrap.wrap(title, width=22)[:2] or [title]
+            pdf.setFont("Helvetica-Bold", 7.6)
+            pdf.setFillColor(MUTED_TEXT_COLOR)
+            title_y = card_y + card_height - 16
+            for line in title_lines:
+                pdf.drawString(x + 10, title_y, line)
+                title_y -= 9
+            pdf.setFont("Helvetica-Bold", 14)
+            pdf.setFillColor(TITLE_COLOR)
+            value_text = value[:22]
+            pdf.drawString(x + 10, card_y + 28, value_text)
+
+        cursor_y = card_y - 24
+
+    def draw_donut_chart(x: float, y_top: float, width_box: float, height_box: float, rows: list[dict]):
+        if not rows:
+            return y_top
+
+        draw_round_box(x, y_top - height_box, width_box, height_box, WHITE)
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.setFillColor(TITLE_COLOR)
+        pdf.drawString(x + 12, y_top - 18, "Distribuição percentual por comportamento")
+
+        center_x = x + 78
+        center_y = y_top - 88
+        radius = 46
+        inner_radius = 24
+        start_angle = 90
+        total_share = sum(max(0.0, float(row["share"])) for row in rows) or 1.0
+        for row in rows:
+            extent = 360.0 * max(0.0, float(row["share"])) / total_share
+            pdf.setFillColor(colors.HexColor(row["color"]))
+            pdf.wedge(center_x - radius, center_y - radius, center_x + radius, center_y + radius, start_angle, extent, stroke=0, fill=1)
+            start_angle += extent
+        pdf.setFillColor(WHITE)
+        pdf.circle(center_x, center_y, inner_radius, stroke=0, fill=1)
+        pdf.setFillColor(TITLE_COLOR)
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawCentredString(center_x, center_y + 3, "100%")
+        pdf.setFont("Helvetica", 7.5)
+        pdf.setFillColor(MUTED_TEXT_COLOR)
+        pdf.drawCentredString(center_x, center_y - 10, "período")
+
+        legend_x = x + 136
+        legend_y = y_top - 42
+        for row in rows[:5]:
+            pdf.setFillColor(colors.HexColor(row["color"]))
+            pdf.roundRect(legend_x, legend_y - 7, 8, 8, 2, fill=1, stroke=0)
+            pdf.setFont("Helvetica", 8.5)
+            pdf.setFillColor(TEXT_COLOR)
+            pdf.drawString(legend_x + 14, legend_y - 1, str(row["label"])[:18])
+            pdf.setFont("Helvetica-Bold", 8.5)
+            pdf.drawRightString(x + width_box - 10, legend_y - 1, f"{float(row['share']):.1f}%")
+            legend_y -= 16
+
+        return y_top - height_box
+
+    def draw_vertical_bars_chart(x: float, y_top: float, width_box: float, height_box: float, rows: list[dict]):
+        if not rows:
+            return y_top
+
+        draw_round_box(x, y_top - height_box, width_box, height_box, WHITE)
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.setFillColor(TITLE_COLOR)
+        pdf.drawString(x + 12, y_top - 18, "Tempo acumulado por comportamento")
+
+        chart_left = x + 16
+        chart_bottom = y_top - height_box + 38
+        chart_width = width_box - 32
+        chart_height = 88
+        max_minutes = max(float(row["minutes"]) for row in rows) or 1.0
+        chart_rows = rows[:5]
+        bar_width = 28
+        gap = (chart_width - (len(chart_rows) * bar_width)) / max(len(chart_rows) + 1, 1)
+
+        pdf.setStrokeColor(BORDER_COLOR)
+        pdf.line(chart_left, chart_bottom, chart_left + chart_width, chart_bottom)
+
+        for index, row in enumerate(chart_rows):
+            bar_x = chart_left + gap + index * (bar_width + gap)
+            fill_height = chart_height * (float(row["minutes"]) / max_minutes)
+            pdf.setFillColor(colors.HexColor(row["color"]))
+            pdf.roundRect(bar_x, chart_bottom, bar_width, fill_height, 3, fill=1, stroke=0)
+            pdf.setFont("Helvetica-Bold", 8)
+            pdf.setFillColor(TITLE_COLOR)
+            pdf.drawCentredString(bar_x + bar_width / 2, chart_bottom + fill_height + 8, f"{float(row['minutes']):.1f} min")
+            pdf.setFont("Helvetica", 7.5)
+            pdf.drawCentredString(bar_x + bar_width / 2, chart_bottom - 11, str(row["label"])[:10])
+
+        return y_top - height_box
+
+    def draw_temporal_chart(rows: list[dict]):
+        nonlocal cursor_y
+        ensure_space(226)
+        box_height = 172
+        draw_round_box(margin_x, cursor_y - box_height, usable_width, box_height, WHITE)
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.setFillColor(TITLE_COLOR)
+        pdf.drawString(margin_x + 12, cursor_y - 18, "Distribuição temporal da aula")
+
+        chart_x = margin_x + 18
+        chart_y = cursor_y - box_height + 34
+        chart_width = usable_width - 36
+        label_width = 72
+        chart_height = 88
+        bar_height = 16
+        bar_gap = 14
+        max_share = max(float(row["share"]) for row in rows) or 1.0
+
+        pdf.setStrokeColor(BORDER_COLOR)
+        axis_x = chart_x + label_width
+        pdf.line(axis_x, chart_y + 4, axis_x, chart_y + chart_height + 8)
+
+        for index, row in enumerate(rows):
+            y = chart_y + chart_height - ((index + 1) * (bar_height + bar_gap))
+            fill_width = (chart_width - label_width - 34) * (float(row["share"]) / max_share)
+            pdf.setFont("Helvetica-Bold", 8.5)
+            pdf.setFillColor(TITLE_COLOR)
+            label = row["label"].replace(" da aula", "")
+            pdf.drawString(chart_x, y + 4, label)
+
+            pdf.setFillColor(colors.HexColor("#E9EEF5"))
+            pdf.roundRect(axis_x + 8, y, chart_width - label_width - 34, bar_height, 4, fill=1, stroke=0)
+            pdf.setFillColor(colors.HexColor(row["color"]))
+            pdf.roundRect(axis_x + 8, y, fill_width, bar_height, 4, fill=1, stroke=0)
+            pdf.setFont("Helvetica-Bold", 8.5)
+            pdf.setFillColor(TITLE_COLOR)
+            pdf.drawString(axis_x + 14 + fill_width, y + 4, f"{float(row['share']):.1f}%")
+
+        cursor_y = cursor_y - box_height - 12
+
+    def draw_comparison_cards(rows: list[dict]):
+        nonlocal cursor_y
+        if not rows:
+            write_paragraph(
+                "Não houve registros suficientes no período anterior para uma comparação analítica consistente."
+            )
+            return
+
+        ensure_space(92 + (len(rows[:3]) * 48))
+        for row in rows[:3]:
+            card_height = 40
+            card_y = cursor_y - card_height
+            draw_round_box(margin_x, card_y, usable_width, card_height, CARD_FILL)
+            pdf.setFont("Helvetica-Bold", 12)
+            pdf.setFillColor(colors.HexColor(row["color"]))
+            pdf.drawString(margin_x + 12, card_y + 15, row["arrow"])
+            pdf.setFont("Helvetica-Bold", 10)
+            pdf.setFillColor(TITLE_COLOR)
+            pdf.drawString(margin_x + 28, card_y + 24, str(row["behavior"])[:24])
+            pdf.setFont("Helvetica", 8.5)
+            pdf.setFillColor(TEXT_COLOR)
+            if row["tone"] == "estabilidade":
+                detail = "manteve estabilidade em relação ao período anterior"
+            else:
+                detail = f"{row['tone']} de {row['delta_pct']:.1f}% no número de episódios"
+            pdf.drawString(margin_x + 28, card_y + 11, detail[:78])
+            cursor_y = card_y - 8
+
+    def draw_priority_block(priority: dict[str, str]):
+        nonlocal cursor_y
+        ensure_space(92)
+        block_height = 62
+        block_y = cursor_y - block_height
+        draw_round_box(margin_x, block_y, usable_width, block_height, priority["fill"])
+        pdf.setFont("Helvetica-Bold", 11)
+        pdf.setFillColor(colors.HexColor(priority["accent"]))
+        pdf.drawString(margin_x + 12, block_y + 40, priority["label"])
+        pdf.setFont("Helvetica", 9)
+        pdf.setFillColor(TEXT_COLOR)
+        pdf.drawString(margin_x + 12, block_y + 22, priority["reason"][:110])
+        cursor_y = block_y - 16
 
     metrics = report_data["headline_metrics"]
-    write_section("Resumo Geral")
-    write_paragraph(build_observational_summary(report_data))
-    write_line()
-
-    write_section("Indicadores Sintéticos")
-    write_bullets(
-        [
-            f"Total de episódios observacionais: {metrics['total_records']}",
-            f"Duração acumulada estimada: {format_duration_human(metrics['total_duration_seconds'])}",
-            f"Comportamento predominante: {metrics['predominant_behavior']}",
-            f"Dias com registros: {metrics['active_days']}",
-        ]
-    )
-    write_line()
-
-    write_section("Leitura Interpretativa do Período")
-    write_paragraph(generate_interpretive_summary(report_data))
-    write_line()
-
-    write_section("Distribuição Temporal no Período")
-    write_paragraph(generate_temporal_distribution_summary(report_data))
-    write_line()
-
-    write_section("Consistência Comportamental")
-    write_paragraph(generate_consistency_summary(report_data))
-    write_line()
-
     summary = report_data["behavior_summary"]
-    write_section("Frequências por Comportamento")
-    if summary.empty:
-        write_line("Sem dados no período selecionado.")
+    behavior_rows = _build_behavior_distribution_rows(summary)
+    temporal_rows = _build_temporal_segment_rows(report_data)
+    comparison_rows = _build_comparison_rows(report_data)
+    executive_insights = generate_observational_attention_points(report_data)
+    observational_priority = _build_observational_priority(report_data)
+
+    pdf.setTitle("Relatório de Monitoramento Comportamental")
+    draw_header()
+    draw_summary_cards(metrics, summary)
+
+    write_section("Resumo executivo", min_following_space=58)
+    write_paragraph(build_observational_summary(report_data), after=14)
+
+    write_section("Leitura visual dos comportamentos", min_following_space=220)
+    ensure_space(224)
+    donut_width = (usable_width - 12) / 2
+    chart_top = cursor_y
+    chart_height = 176
+    draw_donut_chart(margin_x, chart_top, donut_width, chart_height, behavior_rows)
+    draw_vertical_bars_chart(margin_x + donut_width + 12, chart_top, donut_width, chart_height, behavior_rows)
+    cursor_y = chart_top - chart_height - 18
+
+    write_section("Análise interpretativa", min_following_space=78)
+    write_paragraph(generate_interpretive_summary(report_data), after=10)
+    write_paragraph(generate_consistency_summary(report_data), after=14)
+
+    write_section("Distribuição temporal", min_following_space=226)
+    if temporal_rows:
+        draw_temporal_chart(temporal_rows)
+        write_paragraph(generate_temporal_distribution_summary(report_data), after=14)
     else:
-        write_bullets(
-            [
-                (
-                    f"Ocorrências classificadas como {row['behavior']}: {int(row['records'])} registro(s), "
-                    f"{row['occurrence_percentage']:.2f}% das ocorrências, "
-                    f"{row['duration_minutes']:.2f} min acumulados"
-                )
-                for _, row in summary.iterrows()
-            ]
-        )
-    write_line()
+        write_paragraph("Não houve base suficiente para apresentar a distribuição temporal do período.", after=14)
 
-    peak_days = report_data["peak_days"]
-    write_section("Dias com Maior Recorrência")
-    if peak_days.empty:
-        write_line("Sem dados suficientes para destaque temporal.")
-    else:
-        write_bullets(
-            [
-                (
-                    f"{row['behavior']} em {format_date_br(row['date'])}: "
-                    f"{int(row['records'])} registro(s), {row['duration_minutes']:.2f} min"
-                )
-                for _, row in peak_days.head(6).iterrows()
-            ]
-        )
-    write_line()
+    write_section("Sinais para acompanhamento pedagógico", min_following_space=72)
+    write_bullets(executive_insights[:4], bullet_color=colors.HexColor("#2563EB"))
+    cursor_y -= 10
 
-    write_section("Pontos de Atenção Observacionais")
-    write_bullets(generate_observational_attention_points(report_data))
-    write_line()
+    write_section("Indicação de prioridade observacional", min_following_space=82)
+    draw_priority_block(observational_priority)
 
-    write_section("Comparação com o Período Anterior")
-    write_bullets(generate_previous_period_comparison(report_data))
-    write_line()
+    write_section("Comparação com o período anterior", min_following_space=78)
+    draw_comparison_cards(comparison_rows)
 
-    write_section("Nota Metodológica sobre a Duração Estimada")
-    write_paragraph(generate_methodological_note())
-    write_line()
+    cursor_y -= 6
+    write_section("Nota metodológica", min_following_space=54)
+    write_paragraph(generate_methodological_note(), style=small_style, after=12)
 
-    write_section("Limitações Metodológicas")
-    write_paragraph(build_limitations_text())
+    write_section("Limitações", min_following_space=54)
+    write_paragraph(build_limitations_text(), style=small_style, after=10)
 
+    draw_page_footer()
     pdf.save()
     pdf_buffer.seek(0)
     return pdf_buffer.getvalue()
