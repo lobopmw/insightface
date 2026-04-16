@@ -3518,6 +3518,34 @@ def recognition_behavior():
                 padding: 0.95rem 1rem;
                 line-height: 1.5;
             }
+            .monitor-focus-shell {
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 20px;
+                background: linear-gradient(180deg, rgba(21,25,36,0.94) 0%, rgba(17,21,31,0.98) 100%);
+                box-shadow: 0 16px 34px rgba(0,0,0,0.18);
+                padding: 1.15rem 1.2rem;
+                margin-bottom: 1rem;
+            }
+            .monitor-focus-kicker {
+                color: #8FC0FF;
+                font-size: 0.8rem;
+                font-weight: 800;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                margin-bottom: 0.38rem;
+            }
+            .monitor-focus-title {
+                color: #F5F7FB;
+                font-size: 1.3rem;
+                font-weight: 800;
+                margin: 0 0 0.25rem 0;
+            }
+            .monitor-focus-subtitle {
+                color: #A8B1C0;
+                font-size: 0.95rem;
+                line-height: 1.5;
+                margin: 0;
+            }
             @media (max-width: 1100px) {
                 .monitor-page-hero {
                     align-items: flex-start;
@@ -3584,128 +3612,189 @@ def recognition_behavior():
         )
 
         last_closed_session = st.session_state.get("last_closed_monitoring_session")
-        monitor_left_col, monitor_right_col = st.columns([1.02, 2.05], gap="large")
-        with monitor_left_col:
-            with st.container(border=True):
-                st.markdown(
-                    """
-                    <div class="monitor-card-head" style="margin-bottom:0.85rem;">
-                        <div class="monitor-card-title-wrap">
-                            <div class="monitor-card-icon monitor-card-icon-neutral">☷</div>
-                            <div class="monitor-card-title">Seleção da Sessão</div>
+        run_system = False
+        stop_system = False
+
+        subject_options = {int(row["id"]): row["nome"] for _, row in subjects_df.iterrows()}
+        default_subject_index = 0
+        if selected_subject_id in subject_options:
+            default_subject_index = list(subject_options.keys()).index(selected_subject_id)
+        disable_scope_inputs = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
+        default_subject_label = list(subject_options.values())[default_subject_index]
+        if st.session_state.get(subject_widget_key) not in subject_options.values():
+            st.session_state[subject_widget_key] = default_subject_label
+
+        if disable_scope_inputs:
+            selected_subject_label = subject_options.get(selected_subject_id, default_subject_label)
+        else:
+            selected_subject_label = default_subject_label
+
+        selected_subject_id = next(key for key, value in subject_options.items() if value == selected_subject_label)
+        monitor_state["selected_subject_id"] = selected_subject_id
+        st.session_state["monitoring_state"] = monitor_state
+
+        classes_df = list_classes_for_user(user_context, selected_subject_id)
+        if classes_df.empty:
+            st.warning("Nenhuma turma vinculada à disciplina selecionada foi encontrada para este professor.")
+            return
+
+        class_options = {
+            int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+            for _, row in classes_df.iterrows()
+        }
+        default_class_index = 0
+        if selected_class_id in class_options:
+            default_class_index = list(class_options.keys()).index(selected_class_id)
+        default_class_label = list(class_options.values())[default_class_index]
+        if st.session_state.get(class_widget_key) not in class_options.values():
+            st.session_state[class_widget_key] = default_class_label
+
+        if disable_scope_inputs:
+            selected_class_label = class_options.get(selected_class_id, default_class_label)
+        else:
+            selected_class_label = default_class_label
+
+        selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
+        monitor_state["selected_class_id"] = selected_class_id
+        st.session_state["monitoring_state"] = monitor_state
+
+        if selected_lesson_type not in LESSON_TYPE_OPTIONS:
+            selected_lesson_type = DEFAULT_LESSON_TYPE
+        if st.session_state.get(lesson_type_widget_key) not in LESSON_TYPE_OPTIONS:
+            st.session_state[lesson_type_widget_key] = selected_lesson_type
+
+        if not professor_has_assignment(user_context["teacher_id"], selected_subject_id, selected_class_id):
+            st.error("O professor autenticado não possui vínculo com a disciplina e a turma selecionadas.")
+            return
+
+        current_session_id = monitor_state.get("session_id")
+        current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
+        if current_session and current_session["status"] == SESSION_STATUS_OPEN:
+            ui_state = "Em andamento"
+        elif last_closed_session:
+            ui_state = "Encerrado"
+        else:
+            ui_state = "Não iniciado"
+
+        if ui_state == "Em andamento":
+            session_panel = current_session
+        elif ui_state == "Encerrado":
+            session_panel = last_closed_session
+        else:
+            session_panel = None
+
+        is_focus_mode = ui_state == "Em andamento"
+
+        if not is_focus_mode:
+            monitor_left_col, monitor_right_col = st.columns([1.02, 2.05], gap="large")
+            with monitor_left_col:
+                with st.container(border=True):
+                    st.markdown(
+                        """
+                        <div class="monitor-card-head" style="margin-bottom:0.85rem;">
+                            <div class="monitor-card-title-wrap">
+                                <div class="monitor-card-icon monitor-card-icon-neutral">☷</div>
+                                <div class="monitor-card-title">Seleção da Sessão</div>
+                            </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                subject_options = {int(row["id"]): row["nome"] for _, row in subjects_df.iterrows()}
-                default_subject_index = 0
-                if selected_subject_id in subject_options:
-                    default_subject_index = list(subject_options.keys()).index(selected_subject_id)
-                disable_scope_inputs = bool(current_session_preview and current_session_preview["status"] == SESSION_STATUS_OPEN)
-                default_subject_label = list(subject_options.values())[default_subject_index]
-                if st.session_state.get(subject_widget_key) not in subject_options.values():
-                    st.session_state[subject_widget_key] = default_subject_label
-                selected_subject_label = st.selectbox(
-                    "Disciplina da aula",
-                    list(subject_options.values()),
-                    key=subject_widget_key,
-                    disabled=disable_scope_inputs,
-                )
-                selected_subject_id = next(key for key, value in subject_options.items() if value == selected_subject_label)
-                monitor_state["selected_subject_id"] = selected_subject_id
-                st.session_state["monitoring_state"] = monitor_state
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    selected_subject_label = st.selectbox(
+                        "Disciplina da aula",
+                        list(subject_options.values()),
+                        key=subject_widget_key,
+                        disabled=disable_scope_inputs,
+                    )
+                    selected_subject_id = next(key for key, value in subject_options.items() if value == selected_subject_label)
+                    monitor_state["selected_subject_id"] = selected_subject_id
+                    st.session_state["monitoring_state"] = monitor_state
 
-                classes_df = list_classes_for_user(user_context, selected_subject_id)
-                if classes_df.empty:
-                    st.warning("Nenhuma turma vinculada à disciplina selecionada foi encontrada para este professor.")
-                    return
+                    classes_df = list_classes_for_user(user_context, selected_subject_id)
+                    if classes_df.empty:
+                        st.warning("Nenhuma turma vinculada à disciplina selecionada foi encontrada para este professor.")
+                        return
 
-                class_options = {
-                    int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
-                    for _, row in classes_df.iterrows()
-                }
-                default_class_index = 0
-                if selected_class_id in class_options:
-                    default_class_index = list(class_options.keys()).index(selected_class_id)
-                default_class_label = list(class_options.values())[default_class_index]
-                if st.session_state.get(class_widget_key) not in class_options.values():
-                    st.session_state[class_widget_key] = default_class_label
-                selected_class_label = st.selectbox(
-                    "Turma acompanhada",
-                    list(class_options.values()),
-                    key=class_widget_key,
-                    disabled=disable_scope_inputs,
-                )
-                selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
-                monitor_state["selected_class_id"] = selected_class_id
-                st.session_state["monitoring_state"] = monitor_state
+                    class_options = {
+                        int(row["id"]): row["nome"] if not row["identificador"] else f"{row['nome']} - {row['identificador']}"
+                        for _, row in classes_df.iterrows()
+                    }
+                    default_class_index = 0
+                    if selected_class_id in class_options:
+                        default_class_index = list(class_options.keys()).index(selected_class_id)
+                    default_class_label = list(class_options.values())[default_class_index]
+                    if st.session_state.get(class_widget_key) not in class_options.values():
+                        st.session_state[class_widget_key] = default_class_label
 
-                if selected_lesson_type not in LESSON_TYPE_OPTIONS:
-                    selected_lesson_type = DEFAULT_LESSON_TYPE
-                if st.session_state.get(lesson_type_widget_key) not in LESSON_TYPE_OPTIONS:
-                    st.session_state[lesson_type_widget_key] = selected_lesson_type
-                selected_lesson_type = st.selectbox(
-                    "Tipo de aula",
-                    LESSON_TYPE_OPTIONS,
-                    key=lesson_type_widget_key,
-                    disabled=disable_scope_inputs,
-                )
-                monitor_state["selected_lesson_type"] = selected_lesson_type
-                st.session_state["monitoring_state"] = monitor_state
+                    selected_class_label = st.selectbox(
+                        "Turma acompanhada",
+                        list(class_options.values()),
+                        key=class_widget_key,
+                        disabled=disable_scope_inputs,
+                    )
+                    selected_class_id = next(key for key, value in class_options.items() if value == selected_class_label)
+                    monitor_state["selected_class_id"] = selected_class_id
+                    st.session_state["monitoring_state"] = monitor_state
 
-            if not professor_has_assignment(user_context["teacher_id"], selected_subject_id, selected_class_id):
-                st.error("O professor autenticado não possui vínculo com a disciplina e a turma selecionadas.")
-                return
+                    selected_lesson_type = st.selectbox(
+                        "Tipo de aula",
+                        LESSON_TYPE_OPTIONS,
+                        key=lesson_type_widget_key,
+                        disabled=disable_scope_inputs,
+                    )
+                    monitor_state["selected_lesson_type"] = selected_lesson_type
+                    st.session_state["monitoring_state"] = monitor_state
 
-            current_session_id = monitor_state.get("session_id")
-            current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
-            if current_session and current_session["status"] == SESSION_STATUS_OPEN:
-                ui_state = "Em andamento"
-            elif last_closed_session:
-                ui_state = "Encerrado"
-            else:
-                ui_state = "Não iniciado"
+                _render_context_card(ui_state, selected_subject_label, selected_class_label, session_panel)
 
-            if ui_state == "Em andamento":
-                session_panel = current_session
-            elif ui_state == "Encerrado":
-                session_panel = last_closed_session
-            else:
-                session_panel = None
-
-            _render_context_card(ui_state, selected_subject_label, selected_class_label, session_panel)
-
-            with st.container(border=True):
-                st.markdown(
-                    """
-                    <div class="monitor-card-head" style="margin-bottom:0.85rem;">
-                        <div class="monitor-card-title-wrap">
-                            <div class="monitor-card-icon monitor-card-icon-neutral">⎋</div>
-                            <div class="monitor-card-title">Ações</div>
+                with st.container(border=True):
+                    st.markdown(
+                        """
+                        <div class="monitor-card-head" style="margin-bottom:0.85rem;">
+                            <div class="monitor-card-title-wrap">
+                                <div class="monitor-card-icon monitor-card-icon-neutral">⎋</div>
+                                <div class="monitor-card-title">Ações</div>
+                            </div>
                         </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-                if ui_state == "Não iniciado":
-                    run_system = st.button("▶ Iniciar Monitoramento", type="primary", use_container_width=True)
-                    stop_system = st.button("■ Finalizar Sessão", disabled=True, use_container_width=True)
-                elif ui_state == "Em andamento":
-                    run_system = False
-                    stop_system = st.button("■ Encerrar Monitoramento", use_container_width=True)
-                else:
-                    run_system = st.button("▶ Iniciar nova sessão", type="primary", use_container_width=True)
-                    stop_system = st.button("■ Finalizar Sessão", disabled=True, use_container_width=True)
+                    if ui_state == "Não iniciado":
+                        run_system = st.button("▶ Iniciar Monitoramento", type="primary", use_container_width=True)
+                        st.button("■ Finalizar Sessão", disabled=True, use_container_width=True)
+                    else:
+                        run_system = st.button("▶ Iniciar nova sessão", type="primary", use_container_width=True)
+                        st.button("■ Finalizar Sessão", disabled=True, use_container_width=True)
 
-                st.markdown(
-                    """
-                    <div class="monitor-tip-box" style="margin-top:1rem;">
-                        <div class="monitor-tip-title">Como funciona?</div>
-                        Ao iniciar, o sistema começará a capturar e analisar os comportamentos automaticamente.
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                    st.markdown(
+                        """
+                        <div class="monitor-tip-box" style="margin-top:1rem;">
+                            <div class="monitor-tip-title">Como funciona?</div>
+                            Ao iniciar, o sistema começará a capturar e analisar os comportamentos automaticamente.
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+        else:
+            monitor_right_col = st.container()
+            with st.container():
+                focus_info_col, focus_action_col = st.columns([3.2, 1.1], gap="large")
+                with focus_info_col:
+                    st.markdown(
+                        f"""
+                        <div class="monitor-focus-shell">
+                            <div class="monitor-focus-kicker">Sessão em andamento</div>
+                            <div class="monitor-focus-title">Vídeo em modo ampliado</div>
+                            <p class="monitor-focus-subtitle">
+                                {html.escape(selected_subject_label)} • {html.escape(selected_class_label)} • {html.escape(selected_lesson_type)}
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                with focus_action_col:
+                    stop_system = st.button("■ Encerrar Monitoramento", type="primary", use_container_width=True)
 
         current_session_id = monitor_state.get("session_id")
         current_session = get_monitoring_session_summary(current_session_id) if current_session_id else None
