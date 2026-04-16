@@ -2851,12 +2851,11 @@ def recognition_behavior():
                     use_container_width=True,
                 )
                 if next_identification:
+                    locked_matricula_value = matricula
                     if st.session_state.get("cad_student_mode") == "new":
-                        generated_matricula = get_next_student_registration()
-                        st.session_state["cad_matricula"] = generated_matricula
-                        matricula = generated_matricula
+                        locked_matricula_value = get_next_student_registration()
                     st.session_state["cad_nome_locked"] = nome_aluno
-                    st.session_state["cad_matricula_locked"] = matricula
+                    st.session_state["cad_matricula_locked"] = locked_matricula_value
                     st.session_state["cad_class_id_locked"] = st.session_state.get("cad_class_id")
                     st.session_state["cad_student_mode_locked"] = st.session_state.get("cad_student_mode")
                     st.session_state["cad_existing_student_id_locked"] = st.session_state.get("cad_existing_student_id")
