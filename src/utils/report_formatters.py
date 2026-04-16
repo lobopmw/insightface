@@ -68,7 +68,7 @@ def _classify_distribution_style(active_day_percentage: float, max_daily_share_p
     if active_day_percentage >= 60 and max_daily_share_percentage <= 35:
         return "estável ao longo do período"
     if active_day_percentage < 35 or max_daily_share_percentage >= 50:
-        return "mais concentrada em momentos específicos"
+        return "com maior concentração em momentos específicos"
     return "com oscilações moderadas"
 
 
@@ -282,7 +282,7 @@ def build_observational_summary(report_data: dict) -> str:
     ).iloc[0]
     temporal_rows = _build_temporal_segment_rows(report_data)
     text = (
-        f"No período analisado, observou-se predomínio do comportamento {str(top_behavior['behavior']).lower()}. "
+        f"No período analisado, observou-se predomínio de {str(top_behavior['behavior']).lower()}. "
         f"Foram contabilizados {metrics['total_records']} episódios em {metrics['active_days']} dia(s), com "
         f"tempo total observado de {format_duration_human(metrics['total_duration_seconds'])}."
     )
@@ -336,11 +336,13 @@ def generate_interpretive_summary(report_data: dict) -> str:
             "sugerindo oscilações de engajamento em partes do período."
         )
 
-    return (
-        f"O comportamento {top_behavior_name} predominou no período observado. "
-        f"{consistency_text} {variation_text} "
-        "Os resultados devem ser interpretados como apoio à análise pedagógica, sem finalidade diagnóstica."
-    ).strip()
+    parts = [f"O comportamento {top_behavior_name} predominou no período observado."]
+    if consistency_text:
+        parts.append(consistency_text)
+    if variation_text:
+        parts.append(variation_text.strip())
+    parts.append("Os resultados devem ser interpretados como apoio à análise pedagógica, sem finalidade diagnóstica.")
+    return " ".join(part for part in parts if part).strip()
 
 
 def generate_temporal_distribution_summary(report_data: dict) -> str:
@@ -401,8 +403,8 @@ def generate_consistency_summary(report_data: dict) -> str:
         )
     if "epis" in label:
         return (
-            f"O comportamento {str(predominant_behavior).lower()} esteve presente no conjunto dos registros, "
-            "mas ficou mais concentrado em recortes específicos do período."
+            f"Esse comportamento esteve presente ao longo do período, "
+            "com maior concentração em momentos específicos."
         )
     return (
         f"O comportamento {str(predominant_behavior).lower()} manteve predominância geral, embora com oscilações "
@@ -497,7 +499,7 @@ def build_report_pdf(report_data: dict) -> bytes:
         "Body",
         fontName="Helvetica",
         fontSize=10,
-        leading=14,
+        leading=15,
         alignment=TA_JUSTIFY,
         textColor=TEXT_COLOR,
     )
@@ -505,7 +507,7 @@ def build_report_pdf(report_data: dict) -> bytes:
         "Small",
         fontName="Helvetica",
         fontSize=8.5,
-        leading=12,
+        leading=13,
         alignment=TA_LEFT,
         textColor=MUTED_TEXT_COLOR,
     )
@@ -565,15 +567,15 @@ def build_report_pdf(report_data: dict) -> bytes:
 
     def write_section(title: str, min_following_space: float = 42):
         nonlocal cursor_y
-        ensure_section_space(38 + min_following_space)
-        pdf.setFont("Helvetica-Bold", 14)
+        ensure_section_space(46 + min_following_space)
+        pdf.setFont("Helvetica-Bold", 14.5)
         pdf.setFillColor(TITLE_COLOR)
         pdf.drawString(margin_x, cursor_y, title[:120])
-        cursor_y -= 12
+        cursor_y -= 15
         pdf.setStrokeColor(BORDER_COLOR)
         pdf.setLineWidth(0.8)
         pdf.line(margin_x, cursor_y, margin_x + usable_width, cursor_y)
-        cursor_y -= 24
+        cursor_y -= 28
 
     def draw_round_box(x: float, y: float, w: float, h: float, fill_color, stroke_color=BORDER_COLOR, radius: float = 10):
         pdf.setFillColor(fill_color)
@@ -648,7 +650,7 @@ def build_report_pdf(report_data: dict) -> bytes:
         draw_round_box(x, y_top - height_box, width_box, height_box, WHITE)
         pdf.setFont("Helvetica-Bold", 10)
         pdf.setFillColor(TITLE_COLOR)
-        pdf.drawString(x + 12, y_top - 18, "Distribuição percentual por comportamento")
+        pdf.drawString(x + 12, y_top - 20, "Distribuição percentual por comportamento")
 
         center_x = x + 78
         center_y = y_top - 88
@@ -671,7 +673,7 @@ def build_report_pdf(report_data: dict) -> bytes:
         pdf.drawCentredString(center_x, center_y - 10, "período")
 
         legend_x = x + 136
-        legend_y = y_top - 42
+        legend_y = y_top - 46
         for row in rows[:5]:
             pdf.setFillColor(colors.HexColor(row["color"]))
             pdf.roundRect(legend_x, legend_y - 7, 8, 8, 2, fill=1, stroke=0)
@@ -691,12 +693,12 @@ def build_report_pdf(report_data: dict) -> bytes:
         draw_round_box(x, y_top - height_box, width_box, height_box, WHITE)
         pdf.setFont("Helvetica-Bold", 10)
         pdf.setFillColor(TITLE_COLOR)
-        pdf.drawString(x + 12, y_top - 18, "Tempo acumulado por comportamento")
+        pdf.drawString(x + 12, y_top - 20, "Tempo acumulado por comportamento")
 
         chart_left = x + 16
-        chart_bottom = y_top - height_box + 38
+        chart_bottom = y_top - height_box + 50
         chart_width = width_box - 32
-        chart_height = 88
+        chart_height = 82
         max_minutes = max(float(row["minutes"]) for row in rows) or 1.0
         chart_rows = rows[:5]
         bar_width = 28
@@ -713,8 +715,10 @@ def build_report_pdf(report_data: dict) -> bytes:
             pdf.setFont("Helvetica-Bold", 8)
             pdf.setFillColor(TITLE_COLOR)
             pdf.drawCentredString(bar_x + bar_width / 2, chart_bottom + fill_height + 8, f"{float(row['minutes']):.1f} min")
-            pdf.setFont("Helvetica", 7.5)
-            pdf.drawCentredString(bar_x + bar_width / 2, chart_bottom - 11, str(row["label"])[:10])
+            pdf.setFont("Helvetica", 6.8)
+            label_lines = textwrap.wrap(str(row["label"]), width=12)[:2] or [str(row["label"])]
+            for line_index, line in enumerate(label_lines):
+                pdf.drawCentredString(bar_x + bar_width / 2, chart_bottom - 11 - (line_index * 8), line)
 
         return y_top - height_box
 
@@ -725,10 +729,10 @@ def build_report_pdf(report_data: dict) -> bytes:
         draw_round_box(margin_x, cursor_y - box_height, usable_width, box_height, WHITE)
         pdf.setFont("Helvetica-Bold", 10)
         pdf.setFillColor(TITLE_COLOR)
-        pdf.drawString(margin_x + 12, cursor_y - 18, "Distribuição temporal da aula")
+        pdf.drawString(margin_x + 12, cursor_y - 22, "Distribuição temporal da aula")
 
         chart_x = margin_x + 18
-        chart_y = cursor_y - box_height + 34
+        chart_y = cursor_y - box_height + 30
         chart_width = usable_width - 36
         label_width = 72
         chart_height = 88
@@ -754,9 +758,9 @@ def build_report_pdf(report_data: dict) -> bytes:
             pdf.roundRect(axis_x + 8, y, fill_width, bar_height, 4, fill=1, stroke=0)
             pdf.setFont("Helvetica-Bold", 8.5)
             pdf.setFillColor(TITLE_COLOR)
-            pdf.drawString(axis_x + 14 + fill_width, y + 4, f"{float(row['share']):.1f}%")
+            pdf.drawString(axis_x + 18 + fill_width, y + 4, f"{float(row['share']):.1f}%")
 
-        cursor_y = cursor_y - box_height - 12
+        cursor_y = cursor_y - box_height - 16
 
     def draw_comparison_cards(rows: list[dict]):
         nonlocal cursor_y
@@ -812,32 +816,32 @@ def build_report_pdf(report_data: dict) -> bytes:
     draw_header()
     draw_summary_cards(metrics, summary)
 
-    write_section("Resumo executivo", min_following_space=58)
-    write_paragraph(build_observational_summary(report_data), after=14)
+    write_section("Resumo executivo", min_following_space=62)
+    write_paragraph(build_observational_summary(report_data), after=18)
 
-    write_section("Leitura visual dos comportamentos", min_following_space=220)
-    ensure_space(224)
+    write_section("Leitura visual dos comportamentos", min_following_space=228)
+    ensure_space(232)
     donut_width = (usable_width - 12) / 2
     chart_top = cursor_y
-    chart_height = 176
+    chart_height = 182
     draw_donut_chart(margin_x, chart_top, donut_width, chart_height, behavior_rows)
     draw_vertical_bars_chart(margin_x + donut_width + 12, chart_top, donut_width, chart_height, behavior_rows)
-    cursor_y = chart_top - chart_height - 18
+    cursor_y = chart_top - chart_height - 22
 
-    write_section("Análise interpretativa", min_following_space=78)
-    write_paragraph(generate_interpretive_summary(report_data), after=10)
-    write_paragraph(generate_consistency_summary(report_data), after=14)
+    write_section("Análise interpretativa", min_following_space=84)
+    write_paragraph(generate_interpretive_summary(report_data), after=12)
+    write_paragraph(generate_consistency_summary(report_data), after=18)
 
-    write_section("Distribuição temporal", min_following_space=226)
+    write_section("Distribuição temporal", min_following_space=232)
     if temporal_rows:
         draw_temporal_chart(temporal_rows)
-        write_paragraph(generate_temporal_distribution_summary(report_data), after=14)
+        write_paragraph(generate_temporal_distribution_summary(report_data), after=18)
     else:
-        write_paragraph("Não houve base suficiente para apresentar a distribuição temporal do período.", after=14)
+        write_paragraph("Não houve base suficiente para apresentar a distribuição temporal do período.", after=18)
 
     write_section("Sinais para acompanhamento pedagógico", min_following_space=72)
     write_bullets(executive_insights[:4], bullet_color=colors.HexColor("#2563EB"))
-    cursor_y -= 10
+    cursor_y -= 14
 
     write_section("Indicação de prioridade observacional", min_following_space=82)
     draw_priority_block(observational_priority)
@@ -845,12 +849,12 @@ def build_report_pdf(report_data: dict) -> bytes:
     write_section("Comparação com o período anterior", min_following_space=78)
     draw_comparison_cards(comparison_rows)
 
-    cursor_y -= 6
-    write_section("Nota metodológica", min_following_space=54)
-    write_paragraph(generate_methodological_note(), style=small_style, after=12)
+    cursor_y -= 8
+    write_section("Nota metodológica", min_following_space=58)
+    write_paragraph(generate_methodological_note(), style=small_style, after=14)
 
-    write_section("Limitações", min_following_space=54)
-    write_paragraph(build_limitations_text(), style=small_style, after=10)
+    write_section("Limitações", min_following_space=58)
+    write_paragraph(build_limitations_text(), style=small_style, after=12)
 
     draw_page_footer()
     pdf.save()
