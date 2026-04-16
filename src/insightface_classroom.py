@@ -1668,8 +1668,19 @@ def process_monitor_fragment(
                         back_status = is_back_view(
                             nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=pose_conf_threshold
                         )
+                        sleep_like_posture = False
+                        natural_distracted_posture = False
+                        if have_all:
+                            sleep_metrics = _analyze_sleep_posture(nose, ls, rs, le, re, lw, rw, pose_conf_threshold)
+                            sleep_like_posture = sleep_metrics["strong_sleep"] or sleep_metrics["head_supported"]
+                            natural_distracted_posture = _is_natural_distracted_pose(
+                                nose, ls, rs, le, re, lw, rw, pose_conf_threshold
+                            )
                         new_behavior = check_distracted_status(
-                            behavior_key, (lateral_status or back_status), lateral_timers, timeout=DISTRACTED_TIMEOUT_SECONDS
+                            behavior_key,
+                            (lateral_status or back_status) and natural_distracted_posture and not sleep_like_posture,
+                            lateral_timers,
+                            timeout=DISTRACTED_TIMEOUT_SECONDS,
                         )
                         if new_behavior:
                             current_behavior = new_behavior
@@ -2116,7 +2127,7 @@ def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5, cam_
 
     if cam_side == "LEFT":
         offset = -cam_offset
-    if cam_side == "RIGHT":
+    elif cam_side == "RIGHT":
         offset = +cam_offset
     else:
         offset = 0.0
@@ -2198,6 +2209,133 @@ def _point_distance(p1, p2) -> float:
     return float(np.hypot(float(p1[0]) - float(p2[0]), float(p1[1]) - float(p2[1])))
 
 
+def _analyze_sleep_posture(nose, ls, rs, le, re, lw, rw, threshold):
+    cx = (ls[0] + rs[0]) / 2.0
+    cy = (ls[1] + rs[1]) / 2.0
+    s = max(1.0, float(abs(ls[0] - rs[0])))
+
+    left_wrist_visible = lw[2] > threshold
+    right_wrist_visible = rw[2] > threshold
+    left_elbow_visible = le[2] > threshold
+    right_elbow_visible = re[2] > threshold
+
+    nose_below_shoulders = nose[1] > cy + 0.02 * s
+    nose_far_below_shoulders = nose[1] > cy + 0.12 * s
+    nose_centered = abs(nose[0] - cx) < 0.40 * s
+
+    left_wrist_near_nose = left_wrist_visible and (
+        _point_distance(lw, nose) < 0.38 * s
+        or (abs(lw[0] - nose[0]) < 0.28 * s and abs(lw[1] - nose[1]) < 0.32 * s)
+    )
+    right_wrist_near_nose = right_wrist_visible and (
+        _point_distance(rw, nose) < 0.38 * s
+        or (abs(rw[0] - nose[0]) < 0.28 * s and abs(rw[1] - nose[1]) < 0.32 * s)
+    )
+    left_elbow_near_nose = left_elbow_visible and (
+        _point_distance(le, nose) < 0.44 * s
+        or (abs(le[0] - nose[0]) < 0.34 * s and abs(le[1] - nose[1]) < 0.26 * s)
+    )
+    right_elbow_near_nose = right_elbow_visible and (
+        _point_distance(re, nose) < 0.44 * s
+        or (abs(re[0] - nose[0]) < 0.34 * s and abs(re[1] - nose[1]) < 0.26 * s)
+    )
+
+    left_arm_support = (
+        left_wrist_visible
+        and left_elbow_visible
+        and abs(lw[0] - le[0]) < 0.42 * s
+        and abs(lw[1] - le[1]) < 0.34 * s
+    )
+    right_arm_support = (
+        right_wrist_visible
+        and right_elbow_visible
+        and abs(rw[0] - re[0]) < 0.42 * s
+        and abs(rw[1] - re[1]) < 0.34 * s
+    )
+
+    wrists_below_shoulders = sum(
+        1
+        for wrist, visible in ((lw, left_wrist_visible), (rw, right_wrist_visible))
+        if visible and wrist[1] > cy - 0.02 * s
+    )
+    elbows_below_shoulders = sum(
+        1
+        for elbow, visible in ((le, left_elbow_visible), (re, right_elbow_visible))
+        if visible and elbow[1] > cy - 0.08 * s
+    )
+
+    wrist_near_count = int(left_wrist_near_nose) + int(right_wrist_near_nose)
+    elbow_near_count = int(left_elbow_near_nose) + int(right_elbow_near_nose)
+    support_count = int(left_arm_support) + int(right_arm_support)
+
+    head_supported = (
+        (left_wrist_near_nose and (left_arm_support or left_elbow_near_nose))
+        or (right_wrist_near_nose and (right_arm_support or right_elbow_near_nose))
+        or (wrist_near_count >= 1 and elbow_near_count >= 1)
+    )
+
+    moderate_sleep = (
+        nose_below_shoulders
+        and wrists_below_shoulders >= 1
+        and elbows_below_shoulders >= 1
+        and (
+            head_supported
+            or (wrist_near_count >= 1 and nose_centered)
+            or (elbow_near_count >= 1 and nose_far_below_shoulders)
+            or (support_count >= 1 and nose_far_below_shoulders)
+        )
+    )
+
+    strong_sleep = (
+        nose_below_shoulders
+        and nose_centered
+        and wrists_below_shoulders >= 1
+        and elbows_below_shoulders >= 1
+        and (
+            (wrist_near_count >= 1 and elbow_near_count >= 1)
+            or (wrist_near_count >= 1 and support_count >= 1)
+            or (nose_far_below_shoulders and elbow_near_count >= 1)
+        )
+    )
+
+    return {
+        "scale": s,
+        "nose_below_shoulders": nose_below_shoulders,
+        "nose_far_below_shoulders": nose_far_below_shoulders,
+        "nose_centered": nose_centered,
+        "wrist_near_count": wrist_near_count,
+        "elbow_near_count": elbow_near_count,
+        "support_count": support_count,
+        "wrists_below_shoulders": wrists_below_shoulders,
+        "elbows_below_shoulders": elbows_below_shoulders,
+        "head_supported": head_supported,
+        "moderate_sleep": moderate_sleep,
+        "strong_sleep": strong_sleep,
+    }
+
+
+def _is_natural_distracted_pose(nose, ls, rs, le, re, lw, rw, threshold):
+    sleep_metrics = _analyze_sleep_posture(nose, ls, rs, le, re, lw, rw, threshold)
+    s = sleep_metrics["scale"]
+    cy = (ls[1] + rs[1]) / 2.0
+    shoulder_tilt = abs(ls[1] - rs[1])
+    nose_depth = nose[1] - cy
+    elbows_high = sum(
+        1
+        for elbow in (le, re)
+        if elbow[2] > threshold and elbow[1] < cy - 0.22 * s
+    )
+
+    return (
+        not sleep_metrics["strong_sleep"]
+        and not sleep_metrics["moderate_sleep"]
+        and not sleep_metrics["head_supported"]
+        and nose_depth < 0.14 * s
+        and shoulder_tilt < max(18.0, 0.20 * s)
+        and elbows_high == 0
+    )
+
+
 def _transition_frames_required(current_state: str, candidate_state: str) -> int:
     if current_state == "Dormindo" and candidate_state != "Dormindo":
         return EXIT_SLEEP_FRAMES
@@ -2222,6 +2360,7 @@ def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
     head_clearance = cy - nose[1]
     head_offset_x = abs(nose[0] - cx)
     shoulder_tilt = abs(ls[1] - rs[1])
+    sleep_metrics = _analyze_sleep_posture(nose, ls, rs, le, re, lw, rw, threshold)
 
     # "Cabeça baixa" bloqueia "Atento" e prioriza estados conservadores.
     is_head_low = head_clearance < 0.16 * s or nose[1] > cy - 0.03 * s
@@ -2240,36 +2379,14 @@ def classify_behavior(nose, ls, rs, le, re, lw, rw, threshold):
         )
     )
 
-    # --- DORMINDO / CABEÇA BAIXA ---
-    # Quando a cabeça está baixa, preferimos não "promover" o aluno para Atento.
-    # Se houver apoio compatível com sono, marcamos Dormindo; caso contrário,
-    # devolvemos Distraido ou Indeterminado para reduzir falso positivo.
-    MIN_S_FOR_SLEEP = 28.0
-    DY_COEF = 0.14
-    DX_COEF = 0.35 if s >= 50 else 0.55
-    ELB_NEAR = 0.26
-    WRIST_ELBOW_X_NEAR = 0.38
-    WRIST_ELBOW_Y_NEAR = 0.30
-
-    dy = nose[1] - cy
-    dx = abs(nose[0] - cx)
-    best_elbow = min(abs(nose[1] - le[1]), abs(nose[1] - re[1]))
-    hands_low = (lw[1] > cy - 0.08 * s) and (rw[1] > cy - 0.08 * s)
-    elbows_low = (le[1] > cy - 0.12 * s) and (re[1] > cy - 0.12 * s)
-    left_support = abs(lw[0] - le[0]) < WRIST_ELBOW_X_NEAR * s and abs(lw[1] - le[1]) < WRIST_ELBOW_Y_NEAR * s
-    right_support = abs(rw[0] - re[0]) < WRIST_ELBOW_X_NEAR * s and abs(rw[1] - re[1]) < WRIST_ELBOW_Y_NEAR * s
-    wrist_support = left_support or right_support
-
-    if s >= MIN_S_FOR_SLEEP and hands_low and elbows_low:
-        head_low_ok = (dy > DY_COEF * s) and (dx < DX_COEF * s)
-        elbow_near_ok = (best_elbow < ELB_NEAR * s) and (nose[1] > cy - 0.10 * s)
-        if wrist_support and (head_low_ok or elbow_near_ok):
-            return "Dormindo"
-        if head_low_ok or is_looking_down:
-            return "Distraido"
+    # "Dormindo" exige assinatura forte de apoio: nariz abaixo da linha dos ombros
+    # e proximidade consistente com punho/cotovelo, evitando confundir cabeça baixa
+    # simples com distração lateral.
+    if s >= 28.0 and (sleep_metrics["strong_sleep"] or sleep_metrics["moderate_sleep"]):
+        return "Dormindo"
 
     if is_looking_down:
-        return "Distraido"
+        return "Indeterminado"
     if is_head_low:
         return "Indeterminado"
 
