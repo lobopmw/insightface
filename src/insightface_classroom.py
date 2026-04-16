@@ -1669,16 +1669,12 @@ def process_monitor_fragment(
                             nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=pose_conf_threshold
                         )
                         sleep_like_posture = False
-                        natural_distracted_posture = False
                         if have_all:
                             sleep_metrics = _analyze_sleep_posture(nose, ls, rs, le, re, lw, rw, pose_conf_threshold)
                             sleep_like_posture = sleep_metrics["strong_sleep"] or sleep_metrics["head_supported"]
-                            natural_distracted_posture = _is_natural_distracted_pose(
-                                nose, ls, rs, le, re, lw, rw, pose_conf_threshold
-                            )
                         new_behavior = check_distracted_status(
                             behavior_key,
-                            (lateral_status or back_status) and natural_distracted_posture and not sleep_like_posture,
+                            (lateral_status or back_status) and not sleep_like_posture,
                             lateral_timers,
                             timeout=DISTRACTED_TIMEOUT_SECONDS,
                         )
@@ -2117,11 +2113,11 @@ def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5, cam_
 
     # limiar dinâmico p/ razão de deslocamento (nariz vs olhos)
     if s < 40:
-        t_ratio = 0.22
+        t_ratio = 0.18
     elif s < 60:
-        t_ratio = 0.28
+        t_ratio = 0.24
     else:
-        t_ratio = 0.34
+        t_ratio = 0.30
 
     # offset conforme o lado da camera
 
@@ -2145,8 +2141,8 @@ def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5, cam_
 
     # assimetria de confiança dos olhos (um muito baixo e outro alto)
     cond_conf_eyes = (
-        (l_eye[2] < conf_thr and r_eye[2] > conf_thr + 0.1) or
-        (r_eye[2] < conf_thr and l_eye[2] > conf_thr + 0.1)
+        (l_eye[2] < conf_thr and r_eye[2] > conf_thr + 0.08) or
+        (r_eye[2] < conf_thr and l_eye[2] > conf_thr + 0.08)
     )
 
     # --- ORELHAS (fallback) ---
@@ -2166,8 +2162,8 @@ def is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=0.5, cam_
 
         # assimetria de confiança das orelhas
         cond_conf_ears = (
-            (l_ear[2] < conf_thr and r_ear[2] > conf_thr + 0.1) or
-            (r_ear[2] < conf_thr and l_ear[2] > conf_thr + 0.1)
+            (l_ear[2] < conf_thr and r_ear[2] > conf_thr + 0.08) or
+            (r_ear[2] < conf_thr and l_ear[2] > conf_thr + 0.08)
         )
         cond_ears = cond_ratio_ears or cond_conf_ears
 
@@ -2325,13 +2321,19 @@ def _is_natural_distracted_pose(nose, ls, rs, le, re, lw, rw, threshold):
         for elbow in (le, re)
         if elbow[2] > threshold and elbow[1] < cy - 0.22 * s
     )
+    arms_relaxed = (
+        sleep_metrics["wrist_near_count"] == 0
+        and sleep_metrics["elbow_near_count"] == 0
+        and sleep_metrics["support_count"] == 0
+    )
 
     return (
         not sleep_metrics["strong_sleep"]
         and not sleep_metrics["moderate_sleep"]
         and not sleep_metrics["head_supported"]
-        and nose_depth < 0.14 * s
-        and shoulder_tilt < max(18.0, 0.20 * s)
+        and arms_relaxed
+        and nose_depth < 0.18 * s
+        and shoulder_tilt < max(24.0, 0.26 * s)
         and elbows_high == 0
     )
 
