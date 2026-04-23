@@ -387,6 +387,28 @@ docker compose logs -f relay
 docker compose logs -f app
 ```
 
+### 6.4 Acesso local e remoto
+
+O container da aplicação publica a porta `8501` no host e o Streamlit sobe com `--server.address=0.0.0.0`.
+
+Isso significa:
+
+- na própria máquina que executa o Docker, o acesso pode ser feito por `https://localhost:8501`;
+- em outra máquina da rede, o acesso deve ser feito por `https://<IP-ou-host-da-maquina-que-executa-o-docker>:8501`;
+- não use `localhost` a partir de uma máquina remota, porque nesse caso `localhost` aponta para a própria máquina cliente, e não para o servidor onde o sistema está rodando.
+
+Exemplos:
+
+- acesso local no servidor: `https://localhost:8501`
+- acesso remoto na mesma rede: `https://192.168.1.50:8501`
+- acesso por IP público: `https://SEU_IP_PUBLICO:8501`
+
+Observações importantes:
+
+- a porta `8501` precisa estar liberada no firewall da máquina host;
+- se houver roteador, NAT ou cloud security group, a porta `8501/TCP` também precisa estar liberada ou redirecionada;
+- como o Streamlit pode apresentar certificado não confiado nesse cenário, o navegador pode exibir aviso de segurança ao abrir a URL HTTPS.
+
 ## 7. Comandos úteis
 
 ### 7.1 Reprocessar embeddings via CLI
@@ -457,6 +479,15 @@ GROUP BY source;
 - revise a configuração de cookie do ambiente;
 - se necessário, habilite fallback por token com `AUTH_ENABLE_QUERY_TOKEN`;
 - defina um `AUTH_TOKEN_SECRET` seguro fora do valor padrão.
+
+### 9.6 Não consigo abrir pela máquina remota
+
+- confirme se o container `app` está em execução com `docker compose ps`;
+- valide se a porta `8501` está publicada no host;
+- acesse usando `https://<IP_DO_SERVIDOR>:8501`, e não `https://localhost:8501`;
+- se o navegador exibir alerta de certificado, teste aceitando o aviso para validar conectividade;
+- confirme se o firewall local, roteador ou provedor cloud libera `8501/TCP`;
+- se o acesso for externo pela internet, confirme se o IP público ou DNS aponta para a máquina correta.
 
 ## 10. Boas práticas operacionais
 
