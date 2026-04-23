@@ -5,7 +5,6 @@ from datetime import date, timedelta
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 from services.report_service import generate_report_data, get_available_filters, get_available_students
@@ -44,7 +43,11 @@ HIGHLIGHT_CARD_STYLES = {
 }
 
 DEFAULT_CLASS_START = pd.Timestamp("2000-01-01 08:00:00")
-DEFAULT_CLASS_END = pd.Timestamp("2000-01-01 11:40:00")
+DEFAULT_CLASS_END = pd.Timestamp("2000-01-01 09:00:00")
+TIMELINE_MARGIN_MINUTES = 5
+TIMELINE_RECENT_WINDOW_MINUTES = 50
+TIMELINE_MIN_WINDOW_MINUTES = 60
+TIMELINE_MULTI_DAY_MIN_WINDOW_MINUTES = 90
 
 BEHAVIOR_SIGNAL_PRIORITY_COLORS = {
     "Baixa prioridade": "#4CAF50",
@@ -472,6 +475,41 @@ def _get_timeline_dtick_ms(span_minutes: float) -> int:
     return 60 * 60 * 1000
 
 
+def _get_timeline_visible_window(timeline_plot_df: pd.DataFrame) -> tuple[pd.Timestamp, pd.Timestamp, float]:
+    if timeline_plot_df.empty:
+        span_minutes = float((DEFAULT_CLASS_END - DEFAULT_CLASS_START).total_seconds()) / 60.0
+        return DEFAULT_CLASS_START, DEFAULT_CLASS_END, span_minutes
+
+    timeline_start = timeline_plot_df["timeline_start"].min()
+    timeline_end = timeline_plot_df["timeline_end"].max()
+    if pd.isna(timeline_start) or pd.isna(timeline_end):
+        span_minutes = float((DEFAULT_CLASS_END - DEFAULT_CLASS_START).total_seconds()) / 60.0
+        return DEFAULT_CLASS_START, DEFAULT_CLASS_END, span_minutes
+
+    unique_days = max(1, int(timeline_plot_df["date_label"].nunique()))
+    if unique_days == 1:
+        visual_end = timeline_end
+        visual_start = visual_end - pd.Timedelta(minutes=TIMELINE_RECENT_WINDOW_MINUTES)
+        return visual_start, visual_end, float(TIMELINE_RECENT_WINDOW_MINUTES)
+
+    min_window_minutes = (
+        TIMELINE_MULTI_DAY_MIN_WINDOW_MINUTES if unique_days > 1 else TIMELINE_MIN_WINDOW_MINUTES
+    )
+    actual_span_minutes = max(
+        1.0,
+        float((timeline_end - timeline_start).total_seconds()) / 60.0,
+    )
+
+    if actual_span_minutes >= min_window_minutes:
+        return timeline_start, timeline_end, actual_span_minutes
+
+    center = timeline_start + ((timeline_end - timeline_start) / 2)
+    half_window = pd.Timedelta(minutes=min_window_minutes / 2.0)
+    visual_start = center - half_window
+    visual_end = center + half_window
+    return visual_start, visual_end, float(min_window_minutes)
+
+
 def _build_timeline_figure(timeline_df: pd.DataFrame) -> px.timeline:
     timeline_plot_df = timeline_df.copy()
     timeline_plot_df["duration_label"] = timeline_plot_df["duration_seconds"].apply(_format_duration_br)
@@ -501,21 +539,13 @@ def _build_timeline_figure(timeline_df: pd.DataFrame) -> px.timeline:
         tickfont=dict(size=12),
     )
 
-    timeline_start = timeline_plot_df["timeline_start"].min()
-    timeline_end = timeline_plot_df["timeline_end"].max()
-    visual_start = min(DEFAULT_CLASS_START, timeline_start) if pd.notna(timeline_start) else DEFAULT_CLASS_START
-    visual_end = max(DEFAULT_CLASS_END, timeline_end) if pd.notna(timeline_end) else DEFAULT_CLASS_END
-    span_minutes = max(
-        1.0,
-        float((visual_end - visual_start).total_seconds()) / 60.0 if pd.notna(visual_start) and pd.notna(visual_end) else 1.0,
-    )
-    margin_minutes = 5
+    visual_start, visual_end, span_minutes = _get_timeline_visible_window(timeline_plot_df)
 
     if pd.notna(visual_start) and pd.notna(visual_end):
         fig_timeline.update_xaxes(
             range=[
-                visual_start - pd.Timedelta(minutes=margin_minutes),
-                visual_end + pd.Timedelta(minutes=margin_minutes),
+                visual_start - pd.Timedelta(minutes=TIMELINE_MARGIN_MINUTES),
+                visual_end + pd.Timedelta(minutes=TIMELINE_MARGIN_MINUTES),
             ]
         )
 
@@ -1619,7 +1649,6 @@ def render_report_page(user_context: dict):
     predominant_share = float(summary_df.iloc[0]["duration_percentage"]) if not summary_df.empty else 0.0
     management_balance_df = _build_management_balance_df(summary_df)
     signal_priority_df = _build_signal_priority_df(summary_df)
-    segment_heatmap_df = _build_segment_heatmap_df(report_data["session_segment_distribution"])
     daily_management_trend_df = _build_daily_management_trend_df(report_data["daily_distribution"])
     total_records_subtitle = (
         f"{metrics['total_records']} episódio registrado"
@@ -1745,34 +1774,6 @@ def render_report_page(user_context: dict):
 
     fig_timeline = _build_timeline_figure(timeline_df)
 
-    fig_segment_heatmap = None
-    if not segment_heatmap_df.empty:
-        fig_segment_heatmap = go.Figure(
-            data=go.Heatmap(
-                z=segment_heatmap_df.values,
-                x=list(segment_heatmap_df.columns),
-                y=list(segment_heatmap_df.index),
-                colorscale=[
-                    [0.0, "#0B1F33"],
-                    [0.35, "#1E88E5"],
-                    [0.65, "#FBC02D"],
-                    [1.0, "#E53935"],
-                ],
-                colorbar=dict(title="% no trecho"),
-                hovertemplate=(
-                    "<b>Momento da aula:</b> %{y}<br>"
-                    "<b>Dimensão:</b> %{x}<br>"
-                    "<b>Participação no trecho:</b> %{z:.1f}%<extra></extra>"
-                ),
-            )
-        )
-        fig_segment_heatmap.update_layout(
-            title="Em que momento da aula os sinais aparecem",
-            margin=dict(l=10, r=10, t=50, b=10),
-            xaxis_title="Dimensão observada",
-            yaxis_title="Trecho da aula",
-        )
-
     fig_period = None
     if period_df["period_label"].nunique() > 1:
         fig_period = px.bar(
@@ -1876,14 +1877,7 @@ def render_report_page(user_context: dict):
     with tabs[2]:
         st.subheader("Distribuição Temporal")
         st.caption("Identifica em que momento da aula o padrão se intensifica e apoia decisões de intervenção pedagógica.")
-        chart_col1, chart_col2 = st.columns([1.2, 1], gap="large")
-        with chart_col1:
-            st.plotly_chart(fig_timeline, width="stretch")
-        with chart_col2:
-            if fig_segment_heatmap is not None:
-                st.plotly_chart(fig_segment_heatmap, width="stretch")
-            else:
-                st.info("Não houve base suficiente para comparar os trechos da aula.")
+        st.plotly_chart(fig_timeline, width="stretch")
         st.info(short_temporal_summary or "Não houve base suficiente para sintetizar a leitura temporal.")
 
     with tabs[3]:

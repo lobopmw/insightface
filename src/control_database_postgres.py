@@ -1812,6 +1812,8 @@ def show_behavior_charts(user_context: dict):
         showlegend=False,
     )
 
+    timeline_recent_window_minutes = 50
+
     fig_timeline = px.timeline(
         df_temporal,
         x_start="start_time",
@@ -1823,6 +1825,18 @@ def show_behavior_charts(user_context: dict):
         template="plotly_dark",
     )
     fig_timeline.update_yaxes(autorange="reversed")
+    latest_end_time = df_temporal["end_time"].max()
+    if pd.notna(latest_end_time):
+        visual_end = latest_end_time
+        visual_start = visual_end - pd.Timedelta(minutes=timeline_recent_window_minutes)
+        fig_timeline.update_xaxes(
+            range=[
+                visual_start,
+                visual_end,
+            ],
+            tickformat="%H:%M",
+            dtick=5 * 60 * 1000,
+        )
     fig_timeline.update_layout(
         title_text="",
         paper_bgcolor="rgba(0,0,0,0)",
