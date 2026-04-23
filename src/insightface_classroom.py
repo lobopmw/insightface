@@ -113,18 +113,20 @@ FACE_DET_SIZE_CPU = (800, 800)
 POSE_IMGSZ_GPU = 1280
 POSE_IMGSZ_CPU = 800
 POSE_DET_CONF = 0.18
-FACE_REFRESH_INTERVAL_GPU = 0.12
-FACE_REFRESH_INTERVAL_CPU = 0.30
+FACE_REFRESH_INTERVAL_GPU = 0.08
+FACE_REFRESH_INTERVAL_CPU = 0.24
 FACE_RECOGNITION_BASE_THRESHOLD = 0.45
 FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.39
-FACE_RECOGNITION_SMALL_THRESHOLD = 0.32
-FACE_RECOGNITION_TINY_THRESHOLD = 0.24
+FACE_RECOGNITION_SMALL_THRESHOLD = 0.30
+FACE_RECOGNITION_TINY_THRESHOLD = 0.22
 FACE_RECOGNITION_MIN_MARGIN = 0.015
-FACE_RECOGNITION_TINY_MARGIN = 0.003
-FAR_FACE_REGION_TOP_RATIO = float(os.getenv("FAR_FACE_REGION_TOP_RATIO", "0.68"))
-FAR_FACE_UPSCALE = float(os.getenv("FAR_FACE_UPSCALE", "1.60"))
-FAR_FACE_EXTRA_PASS_MAX_BASE_FACES = int(os.getenv("FAR_FACE_EXTRA_PASS_MAX_BASE_FACES", "4"))
+FACE_RECOGNITION_TINY_MARGIN = 0.0025
+FAR_FACE_REGION_TOP_RATIO = float(os.getenv("FAR_FACE_REGION_TOP_RATIO", "0.74"))
+FAR_FACE_UPSCALE = float(os.getenv("FAR_FACE_UPSCALE", "1.90"))
+FAR_FACE_EXTRA_PASS_MAX_BASE_FACES = int(os.getenv("FAR_FACE_EXTRA_PASS_MAX_BASE_FACES", "6"))
 FAR_FACE_MERGE_IOU = float(os.getenv("FAR_FACE_MERGE_IOU", "0.20"))
+DISPLAY_BOX_MIN_KEYPOINT_CONF = 0.22
+DISPLAY_BOX_MIN_WIDTH = 56.0
 
 CAPTURE_POSE_LABELS = {
     "frontal": "Frontal",
@@ -1641,6 +1643,7 @@ def process_monitor_fragment(
                 y_min, y_max = int(min(y_coords)), int(max(y_coords))
                 y_min = max(0, int(y_min - box_margin_ratio * (y_max - y_min)))
                 person_box = (x_min, y_min, x_max, y_max)
+                detector_person_box = _extract_detector_person_box(result, pid, frame.shape[:2])
 
                 best_i, name_student = 0.0, "Desconhecido"
                 for (fb, nm) in face_named:
@@ -1704,6 +1707,16 @@ def process_monitor_fragment(
                             state["candidate_count"] = 0
 
                     current_behavior = state["state"]
+
+                display_box = _build_display_box(
+                    person_keypoints,
+                    current_behavior,
+                    pose_conf_threshold,
+                    fallback_box=detector_person_box or person_box,
+                    frame_shape=frame.shape[:2],
+                )
+                if display_box is not None:
+                    x_min, y_min, x_max, y_max = display_box
 
                 if name_student != "Desconhecido" and episode_manager is not None:
                     recognized_students_now.add(name_student)
@@ -1824,6 +1837,120 @@ _name_mem = deque(maxlen=80)
 
 def remember_name(box, name):
     _name_mem.append({"box": box, "name": name, "ts": time.time()})
+
+
+def _clamp_box_to_frame(box, frame_shape=None):
+    x1, y1, x2, y2 = [float(v) for v in box]
+    if frame_shape is not None:
+        frame_h = max(1, int(frame_shape[0]))
+        frame_w = max(1, int(frame_shape[1]))
+        x1 = min(max(0.0, x1), float(frame_w - 1))
+        y1 = min(max(0.0, y1), float(frame_h - 1))
+        x2 = min(max(0.0, x2), float(frame_w))
+        y2 = min(max(0.0, y2), float(frame_h))
+
+    if x2 <= x1:
+        x2 = x1 + 1.0
+    if y2 <= y1:
+        y2 = y1 + 1.0
+    return tuple(int(round(v)) for v in (x1, y1, x2, y2))
+
+
+def _extract_detector_person_box(result, person_index: int, frame_shape=None):
+    boxes = getattr(result, "boxes", None)
+    xyxy = None if boxes is None else getattr(boxes, "xyxy", None)
+    if xyxy is None:
+        return None
+    try:
+        total = int(xyxy.shape[0])
+    except Exception:
+        try:
+            total = len(xyxy)
+        except Exception:
+            return None
+    if person_index < 0 or person_index >= total:
+        return None
+    try:
+        raw_box = xyxy[person_index]
+        values = raw_box.tolist() if hasattr(raw_box, "tolist") else list(raw_box)
+        x1, y1, x2, y2 = [float(v) for v in values[:4]]
+    except Exception:
+        return None
+    return _clamp_box_to_frame((x1, y1, x2, y2), frame_shape)
+
+
+def _visible_keypoint_xy(person_keypoints, idx: int, threshold: float):
+    if idx < 0 or idx >= len(person_keypoints):
+        return None
+    point = person_keypoints[idx]
+    if len(point) < 3 or float(point[2]) <= float(threshold):
+        return None
+    return (float(point[0]), float(point[1]))
+
+
+def _build_display_box(person_keypoints, current_behavior: str, pose_conf_threshold: float, fallback_box=None, frame_shape=None):
+    geometry_threshold = max(DISPLAY_BOX_MIN_KEYPOINT_CONF, float(pose_conf_threshold))
+    nose = _visible_keypoint_xy(person_keypoints, 0, geometry_threshold)
+    ls = _visible_keypoint_xy(person_keypoints, 5, geometry_threshold)
+    rs = _visible_keypoint_xy(person_keypoints, 6, geometry_threshold)
+    lh = _visible_keypoint_xy(person_keypoints, 11, geometry_threshold)
+    rh = _visible_keypoint_xy(person_keypoints, 12, geometry_threshold)
+
+    torso_points = [point for point in (nose, ls, rs, lh, rh) if point is not None]
+    if len(torso_points) < 2:
+        return _clamp_box_to_frame(fallback_box, frame_shape) if fallback_box is not None else None
+
+    if ls is not None and rs is not None:
+        center_x = (ls[0] + rs[0]) / 2.0
+        shoulder_y = (ls[1] + rs[1]) / 2.0
+        shoulder_span = max(DISPLAY_BOX_MIN_WIDTH, abs(rs[0] - ls[0]))
+        torso_x_min = min(ls[0], rs[0])
+        torso_x_max = max(ls[0], rs[0])
+    else:
+        xs = [point[0] for point in torso_points]
+        ys = [point[1] for point in torso_points]
+        center_x = sum(xs) / len(xs)
+        shoulder_y = min(ys) + 0.35 * DISPLAY_BOX_MIN_WIDTH
+        shoulder_span = max(DISPLAY_BOX_MIN_WIDTH, max(xs) - min(xs))
+        torso_x_min = min(xs)
+        torso_x_max = max(xs)
+
+    hip_points = [point for point in (lh, rh) if point is not None]
+    if hip_points:
+        torso_x_min = min([torso_x_min] + [point[0] for point in hip_points])
+        torso_x_max = max([torso_x_max] + [point[0] for point in hip_points])
+        bottom = max(point[1] for point in hip_points) + 0.28 * shoulder_span
+    else:
+        bottom = shoulder_y + 2.15 * shoulder_span
+
+    if nose is not None:
+        top = nose[1] - 0.55 * shoulder_span
+    else:
+        top = shoulder_y - 0.95 * shoulder_span
+
+    half_width = max(
+        0.82 * shoulder_span,
+        0.72 * max(1.0, torso_x_max - torso_x_min),
+        DISPLAY_BOX_MIN_WIDTH / 2.0,
+    )
+    left = center_x - half_width
+    right = center_x + half_width
+
+    if current_behavior in ("Perguntando", "Agitado"):
+        shoulder_ceiling = min(point[1] for point in (ls, rs) if point is not None) if (ls or rs) else shoulder_y
+        arm_points = []
+        for idx in (7, 8, 9, 10):
+            point = _visible_keypoint_xy(person_keypoints, idx, geometry_threshold)
+            if point is None:
+                continue
+            if point[1] < shoulder_ceiling + 0.55 * shoulder_span:
+                arm_points.append(point)
+        if arm_points:
+            left = min(left, min(point[0] for point in arm_points) - 0.18 * shoulder_span)
+            right = max(right, max(point[0] for point in arm_points) + 0.18 * shoulder_span)
+            top = min(top, min(point[1] for point in arm_points) - 0.18 * shoulder_span)
+
+    return _clamp_box_to_frame((left, top, right, bottom), frame_shape)
 
 
 def should_render_track(identity: str, show_unknown_boxes: bool = False) -> bool:
@@ -1986,6 +2113,28 @@ class DetectorWorker:
         ):
             return base_faces
 
+        def _run_scaled_face_pass(source_rgb, y_offset: int = 0):
+            upscaled = cv2.resize(
+                source_rgb,
+                None,
+                fx=FAR_FACE_UPSCALE,
+                fy=FAR_FACE_UPSCALE,
+                interpolation=cv2.INTER_CUBIC,
+            )
+            detected_faces = list(self.model_face.get(upscaled))
+            if not detected_faces:
+                return []
+
+            scale = float(FAR_FACE_UPSCALE)
+            for face in detected_faces:
+                bbox = face.bbox.astype(np.float32)
+                bbox[0] /= scale
+                bbox[2] /= scale
+                bbox[1] = (bbox[1] / scale) + y_offset
+                bbox[3] = (bbox[3] / scale) + y_offset
+                face.bbox = bbox
+            return detected_faces
+
         frame_h, frame_w = frame_rgb.shape[:2]
         crop_h = max(1, int(frame_h * FAR_FACE_REGION_TOP_RATIO))
         if crop_h >= frame_h:
@@ -1995,25 +2144,11 @@ class DetectorWorker:
             crop_rgb = frame_rgb[:crop_h, :, :]
             y_offset = 0
 
-        upscaled = cv2.resize(
-            crop_rgb,
-            None,
-            fx=FAR_FACE_UPSCALE,
-            fy=FAR_FACE_UPSCALE,
-            interpolation=cv2.INTER_CUBIC,
-        )
-        boosted_faces = list(self.model_face.get(upscaled))
+        boosted_faces = _run_scaled_face_pass(crop_rgb, y_offset=y_offset)
+        if not boosted_faces and not base_faces and crop_h < frame_h:
+            boosted_faces = _run_scaled_face_pass(frame_rgb, y_offset=0)
         if not boosted_faces:
             return base_faces
-
-        scale = float(FAR_FACE_UPSCALE)
-        for face in boosted_faces:
-            bbox = face.bbox.astype(np.float32)
-            bbox[0] /= scale
-            bbox[2] /= scale
-            bbox[1] = (bbox[1] / scale) + y_offset
-            bbox[3] = (bbox[3] / scale) + y_offset
-            face.bbox = bbox
 
         return _merge_face_detections(base_faces, boosted_faces)
 
