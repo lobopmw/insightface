@@ -1,4 +1,5 @@
 import datetime
+import html
 import io
 import os
 import tempfile
@@ -52,6 +53,11 @@ SESSION_STATUS_CLOSED = "encerrada"
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "America/Araguaina")
 DEFAULT_LESSON_TYPE = "Exposição"
 UNKNOWN_LESSON_TYPE = "Não informado"
+DISSERTATION_CHART_TEMPLATE = "plotly_white"
+DISSERTATION_CHART_FONT_COLOR = "#111827"
+DISSERTATION_CHART_GRID_COLOR = "#E5E7EB"
+DISSERTATION_CHART_AXIS_LINE_COLOR = "#9CA3AF"
+DISSERTATION_CHART_BG_COLOR = "#FFFFFF"
 
 
 def get_local_now() -> datetime.datetime:
@@ -1733,7 +1739,21 @@ def show_behavior_charts(user_context: dict):
         "Distraido": "#C17D48",
         "Distraído": "#C17D48",
     }
-    title_suffix = selected_student
+    chart_student_label = html.escape(selected_student)
+    chart_date_label = html.escape(pd.to_datetime(selected_date).strftime("%d/%m/%y"))
+
+    def _chart_export_title(title: str) -> str:
+        return f"<b>{title} - {chart_student_label} ({chart_date_label})</b>"
+
+    chart_title = dict(
+        x=0.04,
+        xanchor="left",
+        y=0.94,
+        yanchor="top",
+        font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=18),
+    )
+    chart_axis_font = dict(color=DISSERTATION_CHART_FONT_COLOR, size=14)
+    chart_legend_title_font = dict(color=DISSERTATION_CHART_FONT_COLOR, size=14)
     fig_pie = px.pie(
         df_behavior,
         values="total_minutes",
@@ -1741,15 +1761,23 @@ def show_behavior_charts(user_context: dict):
         hole=0.4,
         color_discrete_map=cores,
         labels={"behavior": "Comportamento", "total_minutes": "Tempo (minutos)"},
-        template="plotly_dark",
+        template=DISSERTATION_CHART_TEMPLATE,
     )
     fig_pie.update_layout(
-        title_text="",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#DCE3F4"),
-        margin=dict(l=10, r=10, t=10, b=10),
-        legend=dict(orientation="v", yanchor="middle", y=0.5, x=1.02, xanchor="left"),
+        title=dict(text=_chart_export_title("Percentual do Tempo por Comportamento"), **chart_title),
+        paper_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        plot_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=16),
+        margin=dict(l=55, r=55, t=95, b=35),
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            x=1.02,
+            xanchor="left",
+            font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=15),
+            title=dict(font=chart_legend_title_font),
+        ),
         uniformtext_minsize=18,
         uniformtext_mode="show",
     )
@@ -1757,6 +1785,7 @@ def show_behavior_charts(user_context: dict):
         texttemplate="<b>%{percent}</b>",
         textposition="inside",
         insidetextfont=dict(size=24, color="#F7FAFF"),
+        outsidetextfont=dict(size=16, color=DISSERTATION_CHART_FONT_COLOR),
     )
     fig_bar = px.bar(
         df_behavior,
@@ -1766,22 +1795,33 @@ def show_behavior_charts(user_context: dict):
         color="behavior",
         text="total_minutes",
         color_discrete_map=cores,
-        template="plotly_dark",
+        template=DISSERTATION_CHART_TEMPLATE,
     )
     fig_bar.update_traces(
         texttemplate="<b>%{text:.1f} min</b>",
         textposition="outside",
-        textfont=dict(size=20, color="#F7FAFF"),
+        textfont=dict(size=18, color=DISSERTATION_CHART_FONT_COLOR),
         cliponaxis=False,
     )
     fig_bar.update_layout(
-        title_text="",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#DCE3F4"),
-        margin=dict(l=10, r=10, t=10, b=20),
-        xaxis=dict(title=None, gridcolor="rgba(255,255,255,0.07)"),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+        title=dict(text=_chart_export_title("Tempo total por comportamento"), **chart_title),
+        paper_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        plot_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=15),
+        margin=dict(l=55, r=55, t=95, b=45),
+        xaxis=dict(
+            title=None,
+            gridcolor=DISSERTATION_CHART_GRID_COLOR,
+            linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+            tickfont=chart_axis_font,
+            title_font=chart_axis_font,
+        ),
+        yaxis=dict(
+            gridcolor=DISSERTATION_CHART_GRID_COLOR,
+            linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+            tickfont=chart_axis_font,
+            title_font=chart_axis_font,
+        ),
         showlegend=False,
     )
 
@@ -1793,22 +1833,33 @@ def show_behavior_charts(user_context: dict):
         color="behavior",
         text="share_percentage",
         color_discrete_map=cores,
-        template="plotly_dark",
+        template=DISSERTATION_CHART_TEMPLATE,
     )
     fig_percent.update_traces(
         texttemplate="<b>%{text:.1f}%</b>",
         textposition="outside",
-        textfont=dict(size=18, color="#F7FAFF"),
+        textfont=dict(size=18, color=DISSERTATION_CHART_FONT_COLOR),
         cliponaxis=False,
     )
     fig_percent.update_layout(
-        title_text="",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#DCE3F4"),
-        margin=dict(l=10, r=10, t=10, b=20),
-        xaxis=dict(title=None, gridcolor="rgba(255,255,255,0.07)"),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
+        title=dict(text=_chart_export_title("Percentual do tempo por comportamento"), **chart_title),
+        paper_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        plot_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=15),
+        margin=dict(l=55, r=55, t=95, b=45),
+        xaxis=dict(
+            title=None,
+            gridcolor=DISSERTATION_CHART_GRID_COLOR,
+            linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+            tickfont=chart_axis_font,
+            title_font=chart_axis_font,
+        ),
+        yaxis=dict(
+            gridcolor=DISSERTATION_CHART_GRID_COLOR,
+            linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+            tickfont=chart_axis_font,
+            title_font=chart_axis_font,
+        ),
         showlegend=False,
     )
 
@@ -1822,7 +1873,7 @@ def show_behavior_charts(user_context: dict):
         color="behavior",
         color_discrete_map=cores,
         labels={"behavior": "Comportamento", "start_time": "Início", "end_time": "Fim"},
-        template="plotly_dark",
+        template=DISSERTATION_CHART_TEMPLATE,
     )
     fig_timeline.update_yaxes(autorange="reversed")
     latest_end_time = df_temporal["end_time"].max()
@@ -1838,14 +1889,28 @@ def show_behavior_charts(user_context: dict):
             dtick=5 * 60 * 1000,
         )
     fig_timeline.update_layout(
-        title_text="",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#DCE3F4"),
-        margin=dict(l=10, r=10, t=10, b=20),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.08)"),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
+        title=dict(text=_chart_export_title("Linha do tempo da aula"), **chart_title),
+        paper_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        plot_bgcolor=DISSERTATION_CHART_BG_COLOR,
+        font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=15),
+        margin=dict(l=55, r=55, t=95, b=45),
+        xaxis=dict(
+            gridcolor=DISSERTATION_CHART_GRID_COLOR,
+            linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+            tickfont=chart_axis_font,
+            title_font=chart_axis_font,
+        ),
+        yaxis=dict(
+            gridcolor=DISSERTATION_CHART_GRID_COLOR,
+            linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+            tickfont=chart_axis_font,
+            title_font=chart_axis_font,
+        ),
         legend_title_text="Comportamento",
+        legend=dict(
+            font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=14),
+            title=dict(font=chart_legend_title_font),
+        ),
     )
 
     fig_context = None
@@ -1863,7 +1928,7 @@ def show_behavior_charts(user_context: dict):
                 "share_percentage": "Percentual do tempo (%)",
                 "behavior": "Comportamento",
             },
-            template="plotly_dark",
+            template=DISSERTATION_CHART_TEMPLATE,
         )
         fig_context.update_traces(
             texttemplate="%{text:.1f}%",
@@ -1873,20 +1938,35 @@ def show_behavior_charts(user_context: dict):
             cliponaxis=False,
         )
         fig_context.update_layout(
-            title_text="",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#DCE3F4"),
-            margin=dict(l=10, r=10, t=10, b=20),
-            xaxis=dict(gridcolor="rgba(255,255,255,0.07)"),
-            yaxis=dict(gridcolor="rgba(255,255,255,0.08)", ticksuffix="%"),
+            title=dict(text=_chart_export_title("Comparação por tipo de aula"), **chart_title),
+            paper_bgcolor=DISSERTATION_CHART_BG_COLOR,
+            plot_bgcolor=DISSERTATION_CHART_BG_COLOR,
+            font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=15),
+            margin=dict(l=55, r=55, t=95, b=45),
+            xaxis=dict(
+                gridcolor=DISSERTATION_CHART_GRID_COLOR,
+                linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+                tickfont=chart_axis_font,
+                title_font=chart_axis_font,
+            ),
+            yaxis=dict(
+                gridcolor=DISSERTATION_CHART_GRID_COLOR,
+                linecolor=DISSERTATION_CHART_AXIS_LINE_COLOR,
+                tickfont=chart_axis_font,
+                title_font=chart_axis_font,
+                ticksuffix="%",
+            ),
             legend_title_text="Comportamento",
+            legend=dict(
+                font=dict(color=DISSERTATION_CHART_FONT_COLOR, size=14),
+                title=dict(font=chart_legend_title_font),
+            ),
         )
 
     plotly_config = {
         "displaylogo": False,
         "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-        "toImageButtonOptions": {"format": "png", "scale": 2},
+        "toImageButtonOptions": {"format": "png", "width": 1100, "height": 620, "scale": 1},
     }
 
     with left_col:
