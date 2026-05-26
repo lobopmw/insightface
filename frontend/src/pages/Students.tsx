@@ -1,11 +1,22 @@
-import { Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { GraduationCap, Users } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { Button } from "@/components/ui/Button";
-import { createStudent, deactivateStudent } from "@/features/students/studentsApi";
-import { useNextRegistration, useStudentClasses, useStudents } from "@/hooks/useStudents";
+import { StatCard } from "@/components/dashboard/StatCard";
+import { EmbeddingStatusCard } from "@/components/students/EmbeddingStatusCard";
+import { FaceCaptureWizard } from "@/components/students/FaceCaptureWizard";
+import { StudentForm } from "@/components/students/StudentForm";
+import { StudentProfileCard } from "@/components/students/StudentProfileCard";
+import { StudentTable } from "@/components/students/StudentTable";
+import {
+  createStudent,
+  deactivateStudent,
+  generateStudentEmbeddings,
+  uploadStudentFaceImage,
+} from "@/services/studentsApi";
+import { useNextRegistration, useStudentClasses, useStudentFaceStatus, useStudents } from "@/hooks/useStudents";
 import { useAuthStore } from "@/stores/authStore";
+import type { PoseKey, Student, StudentCreatePayload } from "@/types/student";
 
 export function Students() {
   const token = useAuthStore((state) => state.token);
@@ -15,29 +26,21 @@ export function Students() {
   const { data: nextRegistration, refetch: refetchNextRegistration } = useNextRegistration();
   const students = data?.items ?? [];
   const classes = classesData?.items ?? [];
-  const [name, setName] = useState("");
-  const [matricula, setMatricula] = useState("");
-  const [classId, setClassId] = useState("");
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [embeddingMessage, setEmbeddingMessage] = useState<string | null>(null);
+  const { data: faceStatus, refetch: refetchFaceStatus } = useStudentFaceStatus(selectedStudent?.id);
 
   useEffect(() => {
-    if (!matricula && nextRegistration?.matricula) {
-      setMatricula(nextRegistration.matricula);
+    if (!selectedStudent && students[0]) {
+      setSelectedStudent(students[0]);
     }
-    if (!classId && classes[0]?.id) {
-      setClassId(String(classes[0].id));
-    }
-  }, [classId, classes, matricula, nextRegistration]);
+  }, [selectedStudent, students]);
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      createStudent(token as string, {
-        name,
-        matricula,
-        class_id: classId ? Number(classId) : null,
-      }),
-    onSuccess: () => {
-      setName("");
-      setMatricula("");
+    mutationFn: (payload: StudentCreatePayload) => createStudent(token as string, payload),
+    onSuccess: (student) => {
+      setSelectedStudent(student);
+      setEmbeddingMessage(null);
       void queryClient.invalidateQueries({ queryKey: ["students"] });
       void refetchNextRegistration();
     },
@@ -46,101 +49,100 @@ export function Students() {
   const deactivateMutation = useMutation({
     mutationFn: (studentId: string) => deactivateStudent(token as string, studentId),
     onSuccess: () => {
+      setSelectedStudent(null);
       void queryClient.invalidateQueries({ queryKey: ["students"] });
     },
   });
 
+  const uploadSingleImage = async (pose: PoseKey, image: Blob, index: number) => {
+    if (!token || !selectedStudent?.id) {
+      return;
+    }
+    const response = await uploadStudentFaceImage(token, selectedStudent.id, pose, image, index);
+    setEmbeddingMessage(`Imagem ${index}/10 registrada para ${pose}.`);
+    queryClient.setQueryData(["students", selectedStudent.id, "face-status"], response.status);
+    void refetchFaceStatus();
+  };
+
+  const embeddingMutation = useMutation({
+    mutationFn: () => generateStudentEmbeddings(token as string, selectedStudent?.id as string),
+    onSuccess: (response) => {
+      setEmbeddingMessage(response.message);
+      void refetchFaceStatus();
+    },
+    onError: (error) => {
+      setEmbeddingMessage(error instanceof Error ? error.message : "Falha ao gerar embeddings.");
+    },
+  });
+
+  const canGenerateEmbeddings = useMemo(
+    () =>
+      Boolean(
+        selectedStudent &&
+          faceStatus?.frontal.complete &&
+          faceStatus?.lateral_esquerda.complete &&
+          faceStatus?.lateral_direita.complete &&
+          faceStatus?.cabeca_baixa.complete,
+      ),
+    [faceStatus, selectedStudent],
+  );
+
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between gap-4">
+      <header className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5 shadow-sm md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Alunos</h1>
-          <p className="text-sm text-muted-foreground">Lista inicial consultando o banco atual.</p>
+          <p className="text-sm font-medium text-primary">Cadastro facial</p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-tight">Alunos</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Cadastro acadêmico, captura por poses e geração de embeddings para reconhecimento.
+          </p>
         </div>
-        <Button variant="secondary" onClick={() => void refetchNextRegistration()}>
-          <RefreshCw className="h-4 w-4" />
-          Matrícula
-        </Button>
       </header>
 
-      <form
-        className="grid gap-3 rounded-lg border border-border bg-card p-4 lg:grid-cols-[1.2fr_0.8fr_0.9fr_auto]"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (token && name.trim()) {
-            createMutation.mutate();
-          }
-        }}
-      >
-        <input
-          className="h-10 rounded-md border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Nome do aluno"
-          value={name}
-        />
-        <input
-          className="h-10 rounded-md border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30"
-          onChange={(event) => setMatricula(event.target.value)}
-          placeholder="Matrícula"
-          value={matricula}
-        />
-        <select
-          className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-          onChange={(event) => setClassId(event.target.value)}
-          value={classId}
-        >
-          <option value="">Sem turma</option>
-          {classes.map((classItem) => (
-            <option key={classItem.id} value={classItem.id}>
-              {[classItem.nome, classItem.identificador].filter(Boolean).join(" ")}
-            </option>
-          ))}
-        </select>
-        <Button disabled={!token || !name.trim() || createMutation.isPending} type="submit">
-          <Plus className="h-4 w-4" />
-          Adicionar
-        </Button>
-        {createMutation.isError ? (
-          <p className="text-sm text-red-700 lg:col-span-4">Não foi possível cadastrar o aluno.</p>
-        ) : null}
-      </form>
-
-      <section className="overflow-hidden rounded-lg border border-border bg-card">
-        <div className="grid grid-cols-[1.4fr_1fr_1fr_44px] border-b border-border px-4 py-3 text-xs font-semibold uppercase text-muted-foreground">
-          <span>Nome</span>
-          <span>Matrícula</span>
-          <span>Turma</span>
-          <span />
-        </div>
-
-        {isLoading ? <p className="p-4 text-sm text-muted-foreground">Carregando alunos...</p> : null}
-        {isError ? <p className="p-4 text-sm text-red-700">Não foi possível carregar alunos.</p> : null}
-        {!isLoading && !isError && students.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground">Nenhum aluno encontrado para o escopo atual.</p>
-        ) : null}
-
-        {students.map((student) => (
-          <div
-            key={student.id}
-            className="grid grid-cols-[1.4fr_1fr_1fr_44px] gap-3 border-b border-border px-4 py-3 text-sm last:border-b-0"
-          >
-            <span className="font-medium">{student.name}</span>
-            <span className="text-muted-foreground">{student.matricula ?? "-"}</span>
-            <span className="text-muted-foreground">
-              {[student.class_name, student.class_identifier].filter(Boolean).join(" ") || "-"}
-            </span>
-            <button
-              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-              disabled={deactivateMutation.isPending}
-              onClick={() => deactivateMutation.mutate(student.id)}
-              title="Desativar aluno"
-              type="button"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        ))}
+      <section className="grid gap-4 md:grid-cols-2">
+        <StatCard helper="Registros carregados da API" icon={Users} label="Alunos listados" tone="blue" value={isLoading ? "..." : students.length} />
+        <StatCard helper="Turmas disponiveis para associacao" icon={GraduationCap} label="Turmas" tone="green" value={classes.length} />
       </section>
+
+      {isError ? <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">Nao foi possivel carregar alunos.</p> : null}
+
+      <section className="grid gap-4 xl:grid-cols-[1fr_340px]">
+        <StudentForm
+          classes={classes}
+          defaultRegistration={nextRegistration?.matricula}
+          isLoading={createMutation.isPending}
+          onSubmit={(payload) => createMutation.mutate(payload)}
+        />
+        <StudentProfileCard status={faceStatus} student={selectedStudent} />
+      </section>
+
+      {createMutation.isError ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">Nao foi possivel salvar o aluno.</p>
+      ) : null}
+
+      <FaceCaptureWizard
+        onUploadImage={uploadSingleImage}
+        selectedStudent={selectedStudent}
+        status={faceStatus}
+      />
+
+      <EmbeddingStatusCard
+        canGenerate={canGenerateEmbeddings}
+        isLoading={embeddingMutation.isPending}
+        message={embeddingMessage}
+        onGenerate={() => embeddingMutation.mutate()}
+        status={faceStatus}
+      />
+
+      <StudentTable
+        isLoading={isLoading}
+        onDelete={(studentId) => deactivateMutation.mutate(studentId)}
+        onSelect={(student) => {
+          setSelectedStudent(student);
+          setEmbeddingMessage(null);
+        }}
+        students={students}
+      />
     </div>
   );
 }

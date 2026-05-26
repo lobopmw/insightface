@@ -3,15 +3,16 @@
 @tailwind utilities;
 
 :root {
-  --background: 210 20% 98%;
+  --background: 220 33% 98%;
   --foreground: 222 47% 11%;
   --card: 0 0% 100%;
   --card-foreground: 222 47% 11%;
-  --muted: 214 32% 91%;
-  --muted-foreground: 215 16% 47%;
-  --primary: 187 79% 32%;
+  --muted: 220 24% 94%;
+  --muted-foreground: 215 16% 45%;
+  --primary: 221 83% 53%;
   --primary-foreground: 0 0% 100%;
-  --border: 214 32% 91%;
+  --border: 220 20% 88%;
+  --ring: 221 83% 53%;
 }
 
 body {
@@ -26,6 +27,15 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: hsl(var(--primary) / 0.14);
 }

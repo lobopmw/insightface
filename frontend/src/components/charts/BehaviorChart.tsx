@@ -10,15 +10,15 @@ const data = [
 
 export function BehaviorChart() {
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className="rounded-lg border border-border bg-card p-5 shadow-sm">
       <div className="mb-4">
         <h2 className="text-base font-semibold">Comportamentos</h2>
-        <p className="text-sm text-muted-foreground">Distribuição inicial aguardando integração.</p>
+        <p className="text-sm text-muted-foreground">Distribuicao inicial aguardando integracao em tempo real.</p>
       </div>
       <div className="h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
+            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
             <XAxis dataKey="behavior" />
             <YAxis allowDecimals={false} />
             <Bar dataKey="count" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />

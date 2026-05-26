@@ -1,20 +1,16 @@
-import { Camera, CircleStop, Play } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { CircleStop, Play, RefreshCw } from "lucide-react";
+import { useEffect, useState } from "react";
 
-import { MonitoringPanel } from "@/components/monitoring/MonitoringPanel";
+import { RealtimeEventsList } from "@/components/monitoring/RealtimeEventsList";
+import { MonitoringStatusPanel } from "@/components/monitoring/MonitoringStatusPanel";
+import { MonitoringVideoPanel } from "@/components/monitoring/MonitoringVideoPanel";
 import { Button } from "@/components/ui/Button";
+import { useMonitoring } from "@/hooks/useMonitoring";
 import { useMonitoringOptions } from "@/hooks/useMonitoringOptions";
-import { useAuthStore } from "@/stores/authStore";
-import { useMonitoringStore } from "@/stores/monitoringStore";
 
 export function Monitoring() {
-  const token = useAuthStore((state) => state.token);
   const { data: options, isLoading: isLoadingOptions } = useMonitoringOptions();
-  const activeSession = useMonitoringStore((state) => state.activeSession);
-  const isLoadingSession = useMonitoringStore((state) => state.isLoading);
-  const sessionError = useMonitoringStore((state) => state.error);
-  const startSession = useMonitoringStore((state) => state.startSession);
-  const stopSession = useMonitoringStore((state) => state.stopSession);
+  const { error, events, isActive, isLoading, refreshStatus, start, status, stop, websocketStatus } = useMonitoring();
   const [subjectId, setSubjectId] = useState("");
   const [classId, setClassId] = useState("");
   const [lessonType, setLessonType] = useState("Exposição");
@@ -28,69 +24,107 @@ export function Monitoring() {
     setLessonType((current) => current || options.lesson_types[0] || "Exposição");
   }, [options]);
 
-  const canStart = useMemo(
-    () => Boolean(token && subjectId && classId && lessonType && !activeSession),
-    [activeSession, classId, lessonType, subjectId, token],
-  );
+  const selectedSubject = options?.subjects.find((subject) => String(subject.id) === subjectId);
+  const selectedClass = options?.classes.find((classItem) => String(classItem.id) === classId);
+  const canStart = Boolean(subjectId && classId && lessonType && !isActive && !isLoading);
+  const canStop = Boolean(isActive && !isLoading);
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <header className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5 shadow-sm xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Monitoramento</h1>
-          <p className="text-sm text-muted-foreground">Base preparada para RTSP, IA no backend e WebSocket.</p>
+          <p className="text-sm font-medium text-primary">Tempo real</p>
+          <h2 className="mt-1 text-2xl font-semibold tracking-tight">Sala monitorada</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {selectedSubject?.nome ?? "Disciplina"} ·{" "}
+            {[selectedClass?.nome, selectedClass?.identificador].filter(Boolean).join(" ") || "Turma"} · {lessonType}
+          </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => void refreshStatus()} disabled={isLoading}>
+            <RefreshCw className="h-4 w-4" />
+            Atualizar
+          </Button>
           <Button
-            disabled={!canStart || isLoadingSession}
+            disabled={!canStart}
             onClick={() => {
-              if (!token || !subjectId || !classId) {
-                return;
-              }
-              void startSession(token, {
-                subject_id: Number(subjectId),
-                class_id: Number(classId),
-                lesson_type: lessonType,
+              void start({
+                camera_id: 1,
+                disciplina_id: Number(subjectId),
+                turma_id: Number(classId),
+                tipo_aula: lessonType,
               });
             }}
           >
             <Play className="h-4 w-4" />
             Iniciar
           </Button>
-          <Button
-            disabled={!token || !activeSession || isLoadingSession}
-            onClick={() => {
-              if (token) {
-                void stopSession(token);
-              }
-            }}
-            variant="secondary"
-          >
+          <Button disabled={!canStop} onClick={() => void stop()} variant="secondary">
             <CircleStop className="h-4 w-4" />
-            Encerrar
+            Parar
           </Button>
         </div>
       </header>
 
-      <section className="grid gap-4 xl:grid-cols-[1fr_360px]">
-        <div className="flex aspect-video min-h-[320px] items-center justify-center rounded-lg border border-border bg-slate-950 text-white">
-          <div className="text-center">
-            <Camera className="mx-auto h-10 w-10 opacity-70" />
-            <p className="mt-3 text-sm opacity-80">Stream da câmera será entregue pelo backend</p>
-          </div>
-        </div>
-        <MonitoringPanel
-          activeSession={activeSession}
-          classId={classId}
-          error={sessionError}
-          isLoadingOptions={isLoadingOptions}
-          lessonType={lessonType}
-          options={options}
-          setClassId={setClassId}
-          setLessonType={setLessonType}
-          setSubjectId={setSubjectId}
-          subjectId={subjectId}
-        />
+      <section className="grid gap-4 rounded-lg border border-border bg-card p-4 shadow-sm lg:grid-cols-[1fr_1fr_1fr]">
+        <label className="space-y-2 text-sm font-medium">
+          Disciplina
+          <select
+            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+            disabled={isLoadingOptions || isActive}
+            onChange={(event) => setSubjectId(event.target.value)}
+            value={subjectId}
+          >
+            {(options?.subjects ?? []).map((subject) => (
+              <option key={subject.id} value={subject.id}>
+                {subject.nome}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="space-y-2 text-sm font-medium">
+          Turma
+          <select
+            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+            disabled={isLoadingOptions || isActive}
+            onChange={(event) => setClassId(event.target.value)}
+            value={classId}
+          >
+            {(options?.classes ?? []).map((classItem) => (
+              <option key={classItem.id} value={classItem.id}>
+                {[classItem.nome, classItem.identificador].filter(Boolean).join(" ")}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="space-y-2 text-sm font-medium">
+          Tipo de aula
+          <select
+            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+            disabled={isLoadingOptions || isActive}
+            onChange={(event) => setLessonType(event.target.value)}
+            value={lessonType}
+          >
+            {(options?.lesson_types ?? ["Exposição"]).map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      {error || status.error ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error ?? status.error}</p>
+      ) : null}
+
+      <MonitoringStatusPanel isActive={isActive} status={status} />
+
+      <section className="grid gap-4 xl:grid-cols-[1fr_380px]">
+        <MonitoringVideoPanel cameraStatus={status.camera_status} isActive={isActive} websocketStatus={websocketStatus} />
+        <RealtimeEventsList events={events} />
       </section>
     </div>
   );

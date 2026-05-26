@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { getNextRegistration, listStudentClasses, listStudents } from "@/features/students/studentsApi";
+import { getNextRegistration, getStudentFaceStatus, listStudentClasses, listStudents } from "@/services/studentsApi";
 import { useAuthStore } from "@/stores/authStore";
 
 export function useStudents() {
@@ -10,6 +10,16 @@ export function useStudents() {
     queryKey: ["students"],
     queryFn: () => listStudents(token as string),
     enabled: Boolean(token),
+  });
+}
+
+export function useStudentFaceStatus(studentId?: string | null) {
+  const token = useAuthStore((state) => state.token);
+
+  return useQuery({
+    queryKey: ["students", studentId, "face-status"],
+    queryFn: () => getStudentFaceStatus(token as string, studentId as string),
+    enabled: Boolean(token && studentId),
   });
 }
 

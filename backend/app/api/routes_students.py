@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -9,6 +9,9 @@ from app.db.session import get_db
 from app.schemas.students import (
     ClassListResponse,
     NextRegistrationResponse,
+    EmbeddingGenerationResponse,
+    FaceImageUploadResponse,
+    StudentFaceStatus,
     StudentCreate,
     StudentListResponse,
     StudentRead,
@@ -24,6 +27,8 @@ from app.services.students_service import (
     list_students_for_user,
     update_student,
 )
+from app.services.embedding_service import generate_embeddings_for_student
+from app.services.face_capture_service import get_face_status, save_face_images
 
 router = APIRouter(prefix="/students", tags=["students"])
 
@@ -80,6 +85,54 @@ def update_student_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> StudentRead:
     return update_student(db, current_user, student_id, payload)
+
+
+@router.put("/{student_id}", response_model=StudentRead)
+def replace_student_route(
+    student_id: str,
+    payload: StudentUpdate,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> StudentRead:
+    return update_student(db, current_user, student_id, payload)
+
+
+@router.post("/{student_id}/face-images", response_model=FaceImageUploadResponse)
+async def upload_student_face_images(
+    student_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    pose: Annotated[str, Form()],
+    files: Annotated[list[UploadFile] | None, File()] = None,
+    image: Annotated[UploadFile | None, File()] = None,
+    index: Annotated[int | None, Form()] = None,
+) -> FaceImageUploadResponse:
+    student = get_student_for_user(db, current_user, student_id)
+    uploads = list(files or [])
+    if image is not None:
+        uploads.append(image)
+    saved, status_payload = await save_face_images(db, student, pose, uploads, start_index=index)
+    return FaceImageUploadResponse(student_id=student_id, pose=pose, saved=saved, status=status_payload)
+
+
+@router.post("/{student_id}/generate-embeddings", response_model=EmbeddingGenerationResponse)
+def generate_student_embeddings_route(
+    student_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> EmbeddingGenerationResponse:
+    student = get_student_for_user(db, current_user, student_id)
+    return generate_embeddings_for_student(db, student)
+
+
+@router.get("/{student_id}/face-status", response_model=StudentFaceStatus)
+def get_student_face_status_route(
+    student_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> StudentFaceStatus:
+    student = get_student_for_user(db, current_user, student_id)
+    return get_face_status(db, student)
 
 
 @router.delete("/{student_id}", status_code=status.HTTP_204_NO_CONTENT)

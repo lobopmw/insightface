@@ -1,4 +1,5 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const rawApiUrl = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? "/api";
+const API_BASE_URL = rawApiUrl.startsWith("http") && !rawApiUrl.endsWith("/api") ? `${rawApiUrl}/api` : rawApiUrl;
 
 export type ApiOptions = RequestInit & {
   token?: string;
@@ -6,7 +7,9 @@ export type ApiOptions = RequestInit & {
 
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
+  if (!(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (options.token) {
     headers.set("Authorization", `Bearer ${options.token}`);
   }
@@ -29,4 +32,8 @@ export async function apiRequest<T>(path: string, options: ApiOptions = {}): Pro
 
 export function getApiBaseUrl() {
   return API_BASE_URL;
+}
+
+export function buildApiUrl(path: string) {
+  return `${API_BASE_URL}${path}`;
 }

@@ -41,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_dashboard.router, prefix=settings.API_PREFIX)
     app.include_router(routes_users.router, prefix=settings.API_PREFIX)
     app.include_router(monitoring_ws_router, prefix=settings.API_PREFIX)
+    app.include_router(monitoring_ws_router)
     return app
 
 

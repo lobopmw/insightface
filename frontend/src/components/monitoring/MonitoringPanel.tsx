@@ -26,8 +26,8 @@ export function MonitoringPanel({
   subjectId,
 }: MonitoringPanelProps) {
   return (
-    <aside className="rounded-lg border border-border bg-card p-4">
-      <h2 className="text-base font-semibold">Sessão</h2>
+    <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+      <h2 className="text-base font-semibold">Sessao</h2>
       <div className="mt-4 space-y-4 text-sm">
         <label className="space-y-2 font-medium">
           Disciplina
@@ -88,12 +88,12 @@ export function MonitoringPanel({
           </div>
           <div className="flex justify-between gap-4">
             <dt className="text-muted-foreground">Câmera</dt>
-            <dd className="font-medium">RTSP pendente</dd>
+            <dd className="font-medium">{activeSession ? "Aguardando RTSP" : "Inativa"}</dd>
           </div>
         </dl>
 
         {error ? <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       </div>
-    </aside>
+    </section>
   );
 }

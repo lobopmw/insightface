@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     RELAY_HOST: str = "127.0.0.1"
     RELAY_PORT: int = 5555
+    RTSP_URL: str | None = None
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod

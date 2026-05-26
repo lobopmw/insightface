@@ -10,5 +10,10 @@ bcrypt>=4.0,<5
 python-multipart>=0.0.9,<1
 python-dotenv>=1.0,<2
 
-# AI/runtime dependencies are preserved in the legacy requirements until extraction:
-# opencv-python, ultralytics, insightface, onnxruntime-gpu, torch.
+# AI/runtime dependencies used by the incremental FastAPI monitoring adapter.
+opencv-python>=4.8,<5
+insightface>=0.7,<1
+onnxruntime>=1.17,<2
+torch>=2.0,<3
+torchvision>=0.15,<1
+ultralytics>=8.3,<9

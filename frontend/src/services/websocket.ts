@@ -1,4 +1,4 @@
-const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL ?? "/api";
+const WS_BASE_URL = import.meta.env.VITE_WS_URL ?? import.meta.env.VITE_WS_BASE_URL ?? "/api";
 
 function resolveWebSocketBaseUrl() {
   if (WS_BASE_URL.startsWith("ws://") || WS_BASE_URL.startsWith("wss://")) {
@@ -9,7 +9,9 @@ function resolveWebSocketBaseUrl() {
 }
 
 export function createMonitoringSocket(token?: string): WebSocket {
-  const url = new URL(`${resolveWebSocketBaseUrl()}/ws/monitoring`);
+  const baseUrl = resolveWebSocketBaseUrl();
+  const path = baseUrl.endsWith("/api") ? "/ws/monitoring" : "/ws/monitoring";
+  const url = new URL(`${baseUrl}${path}`);
   if (token) {
     url.searchParams.set("token", token);
   }

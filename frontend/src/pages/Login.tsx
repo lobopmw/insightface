@@ -1,4 +1,4 @@
-import { ArrowRight, ShieldCheck } from "lucide-react";
+import { ArrowRight, BarChart3, Camera, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/Button";
@@ -13,26 +13,38 @@ export function Login() {
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-4">
-      <section className="grid w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-card shadow-sm lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="flex min-h-[520px] flex-col justify-between bg-[url('/classroom-placeholder.svg')] bg-cover bg-center p-8 text-white">
-          <div className="flex h-11 w-11 items-center justify-center rounded-md bg-white/18 backdrop-blur">
+      <section className="grid w-full max-w-6xl overflow-hidden rounded-lg border border-border bg-card shadow-xl shadow-slate-200/70 lg:grid-cols-[1.08fr_0.92fr]">
+        <div className="relative flex min-h-[560px] flex-col justify-between overflow-hidden bg-[url('/classroom-placeholder.svg')] bg-cover bg-center p-8 text-white">
+          <div className="absolute inset-0 bg-slate-950/62" />
+          <div className="relative flex h-11 w-11 items-center justify-center rounded-md bg-white/15 backdrop-blur">
             <ShieldCheck className="h-6 w-6" />
           </div>
-          <div>
-            <p className="text-sm font-medium uppercase">SEDUC</p>
+          <div className="relative">
+            <p className="text-sm font-medium uppercase tracking-wide text-white/75">SEDUC</p>
             <h1 className="mt-3 max-w-md text-4xl font-semibold leading-tight">Monitoramento comportamental em tempo real</h1>
+            <div className="mt-6 grid max-w-lg gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-white/15 bg-white/10 p-4 backdrop-blur">
+                <Camera className="h-5 w-5" />
+                <p className="mt-3 text-sm font-medium">Video e status</p>
+              </div>
+              <div className="rounded-lg border border-white/15 bg-white/10 p-4 backdrop-blur">
+                <BarChart3 className="h-5 w-5" />
+                <p className="mt-3 text-sm font-medium">Indicadores pedagogicos</p>
+              </div>
+            </div>
           </div>
         </div>
 
         <form
-          className="flex flex-col justify-center gap-5 p-8"
+          className="flex flex-col justify-center gap-5 p-8 lg:p-10"
           onSubmit={(event) => {
             event.preventDefault();
             void login({ cpf, password });
           }}
         >
           <div>
-            <h2 className="text-2xl font-semibold">Acessar painel</h2>
+            <p className="text-sm font-medium text-primary">Bem-vindo</p>
+            <h2 className="mt-1 text-2xl font-semibold tracking-tight">Acessar painel</h2>
             <p className="mt-2 text-sm text-muted-foreground">Entre com suas credenciais para continuar.</p>
           </div>
 
