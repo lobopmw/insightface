@@ -2,15 +2,23 @@
 .filesvenv/
 .venv/
 venv/
+.local/
 
 # Python
 __pycache__/
 *.py[cod]
 *.so
 *.log
+.pytest_cache/
+.ruff_cache/
 
 # Streamlit
 .streamlit/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
 
 # Certificados locais
 certs/
@@ -36,4 +44,3 @@ Thumbs.db
 *.pt
 *.h5
 *.ckpt
-
