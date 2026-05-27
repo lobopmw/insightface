@@ -34,31 +34,31 @@ export const CameraCapturePanel = forwardRef<CameraCapturePanelHandle, CameraCap
   useImperativeHandle(ref, () => ({ captureFrame }), [captureFrame]);
 
   return (
-    <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+    <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-base font-semibold">Captura facial</h3>
-          <p className="text-sm text-muted-foreground">Pose atual: {POSE_LABELS[activePose]}</p>
+          <h3 className="text-sm font-semibold">Câmera</h3>
+          <p className="text-xs text-muted-foreground">Pose: {POSE_LABELS[activePose]}</p>
         </div>
-        <Button variant="secondary" disabled={isCapturing} onClick={() => void startCamera()}>
+        <Button className="h-9 px-3" variant="secondary" disabled={isCapturing} onClick={() => void startCamera()}>
           <RefreshCw className="h-4 w-4" />
-          Camera
+          Câmera
         </Button>
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
-        <video ref={videoRef} className="aspect-video w-full object-cover" muted playsInline />
+      <div className="mx-auto mt-3 max-w-[760px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+        <video ref={videoRef} className="aspect-[16/7] max-h-[360px] w-full object-cover" muted playsInline />
       </div>
 
       {cameraError ? <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{cameraError}</p> : null}
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button disabled={disabled || !isCameraReady || isCapturing} onClick={onCaptureClick}>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button className="h-9 px-3" disabled={disabled || !isCameraReady || isCapturing} onClick={onCaptureClick}>
           <Camera className="h-4 w-4" />
           {captureLabel}
         </Button>
         {isCapturing ? (
-          <Button variant="secondary" onClick={onCancel}>
+          <Button className="h-9 px-3" variant="secondary" onClick={onCancel}>
             <XCircle className="h-4 w-4" />
             Cancelar captura
           </Button>

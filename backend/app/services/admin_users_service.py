@@ -12,6 +12,22 @@ def ensure_admin(current_user: CurrentUser) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required")
 
 
+def sync_teacher_profile(db: Session, user_id: int, nome: str, role: str | None) -> None:
+    if (role or "professor").lower() != "professor":
+        return
+    db.execute(
+        text(
+            """
+            INSERT INTO teachers (user_id, nome)
+            VALUES (:user_id, :nome)
+            ON CONFLICT (user_id)
+            DO UPDATE SET nome = EXCLUDED.nome
+            """
+        ),
+        {"user_id": user_id, "nome": nome},
+    )
+
+
 def list_users(db: Session, current_user: CurrentUser) -> list[AdminUserRead]:
     ensure_admin(current_user)
     rows = db.execute(
@@ -51,18 +67,7 @@ def create_user(db: Session, current_user: CurrentUser, payload: AdminUserCreate
         },
     ).mappings().one()
 
-    if (payload.role or "professor").lower() == "professor":
-        db.execute(
-            text(
-                """
-                INSERT INTO teachers (user_id, nome)
-                VALUES (:user_id, :nome)
-                ON CONFLICT (user_id)
-                DO UPDATE SET nome = EXCLUDED.nome
-                """
-            ),
-            {"user_id": row["id"], "nome": row["nome"]},
-        )
+    sync_teacher_profile(db, int(row["id"]), row["nome"], row["role"])
 
     db.commit()
     return AdminUserRead(**dict(row))
@@ -97,5 +102,6 @@ def update_user(db: Session, current_user: CurrentUser, user_id: int, payload: A
     ).mappings().first()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    sync_teacher_profile(db, int(row["id"]), row["nome"], row["role"])
     db.commit()
     return AdminUserRead(**dict(row))

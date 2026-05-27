@@ -21,9 +21,9 @@ export function PoseProgressCard({
   targetCount?: number;
 }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
-      <h3 className="text-base font-semibold">Progresso por pose</h3>
-      <div className="mt-4 space-y-3">
+    <section className="rounded-lg border border-border bg-card p-3 shadow-sm">
+      <h3 className="text-sm font-semibold">Progresso por pose</h3>
+      <div className="mt-3 space-y-2.5">
         {POSE_ORDER.map((pose) => {
           const count = status?.[pose]?.count ?? 0;
           const complete = status?.[pose]?.complete ?? false;
@@ -31,7 +31,7 @@ export function PoseProgressCard({
           const Icon = complete ? CheckCircle2 : Circle;
           return (
             <div key={pose} className="space-y-2">
-              <div className="flex items-center justify-between gap-3 text-sm">
+              <div className="flex items-center justify-between gap-3 text-xs">
                 <span className={pose === activePose ? "font-semibold text-primary" : "font-medium"}>
                   {POSE_LABELS[pose]}
                 </span>
@@ -40,7 +40,7 @@ export function PoseProgressCard({
                   {count}/{targetCount}
                 </span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                 <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} />
               </div>
             </div>

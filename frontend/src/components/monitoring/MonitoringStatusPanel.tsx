@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Activity, Timer, UserCheck } from "lucide-react";
 
 import type { MonitoringStatus } from "@/types/monitoring";
 
@@ -44,18 +45,26 @@ export function MonitoringStatusPanel({ isActive, status }: MonitoringStatusPane
   }, [isActive, now, startedAt]);
 
   const items = [
-    { label: "Status", value: isActive ? "Em andamento" : "Aguardando início" },
-    { label: "Duração da sessão", value: duration },
-    { label: "Alunos reconhecidos agora", value: String(status.recognized_students_now ?? 0) },
+    { label: "Status", value: isActive ? "Em andamento" : "Aguardando início", icon: Activity, tone: "bg-emerald-50 text-emerald-700" },
+    { label: "Duração da sessão", value: duration, icon: Timer, tone: "bg-cyan-50 text-cyan-700" },
+    { label: "Alunos reconhecidos agora", value: String(status.recognized_students_now ?? 0), icon: UserCheck, tone: "bg-amber-50 text-amber-700" },
   ];
 
   return (
     <section className="grid gap-4 md:grid-cols-3">
       {items.map((item) => {
+        const Icon = item.icon;
         return (
-          <article key={item.label} className="rounded-lg border border-border bg-card p-4 shadow-sm">
-            <p className="text-sm font-medium text-muted-foreground">{item.label}</p>
-            <p className="mt-3 text-lg font-semibold tracking-tight">{item.value}</p>
+          <article key={item.label} className="rounded-lg border border-border bg-card p-4 shadow-sm shadow-slate-200/60">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase text-muted-foreground">{item.label}</p>
+                <p className="mt-3 text-xl font-semibold tracking-tight">{item.value}</p>
+              </div>
+              <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${item.tone}`}>
+                <Icon className="h-5 w-5" />
+              </div>
+            </div>
           </article>
         );
       })}

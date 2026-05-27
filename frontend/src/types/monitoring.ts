@@ -9,9 +9,15 @@ export type MonitoringClass = {
   identificador?: string | null;
 };
 
+export type MonitoringAssignment = {
+  subject_id: number;
+  class_id: number;
+};
+
 export type MonitoringOptions = {
   subjects: MonitoringSubject[];
   classes: MonitoringClass[];
+  assignments?: MonitoringAssignment[];
   lesson_types: string[];
 };
 

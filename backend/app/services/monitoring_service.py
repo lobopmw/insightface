@@ -244,6 +244,11 @@ def list_monitoring_options(db: Session, current_user: CurrentUser) -> Monitorin
             FROM classes
             ORDER BY nome, identificador
         """
+        assignments_query = """
+            SELECT DISTINCT subject_id, class_id
+            FROM teacher_subject_class
+            ORDER BY subject_id, class_id
+        """
     else:
         params["teacher_id"] = current_user.teacher_id
         subjects_query = """
@@ -260,12 +265,20 @@ def list_monitoring_options(db: Session, current_user: CurrentUser) -> Monitorin
             WHERE tsc.teacher_id = :teacher_id
             ORDER BY c.nome, identificador
         """
+        assignments_query = """
+            SELECT DISTINCT subject_id, class_id
+            FROM teacher_subject_class
+            WHERE teacher_id = :teacher_id
+            ORDER BY subject_id, class_id
+        """
 
     subject_rows = db.execute(text(subjects_query), params).mappings().all()
     class_rows = db.execute(text(classes_query), params).mappings().all()
+    assignment_rows = db.execute(text(assignments_query), params).mappings().all()
     return MonitoringOptionsResponse(
         subjects=[MonitoringSubject(**dict(row)) for row in subject_rows],
         classes=[MonitoringClass(**dict(row)) for row in class_rows],
+        assignments=[dict(row) for row in assignment_rows],
         lesson_types=LESSON_TYPES,
     )
 

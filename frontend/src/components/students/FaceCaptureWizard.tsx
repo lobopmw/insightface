@@ -97,36 +97,31 @@ export function FaceCaptureWizard({
   };
 
   return (
-    <section className="space-y-4">
-      <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
-        <p className="text-sm font-medium text-primary">Etapa 2</p>
-        <h3 className="mt-1 text-base font-semibold">Captura facial automática</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {selectedStudent ? `Aluno: ${selectedStudent.name}` : "Salve ou selecione um aluno para habilitar a captura."}
-        </p>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-        <div className="space-y-4">
-          <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+    <section className="space-y-3">
+      <div className="grid gap-3 xl:grid-cols-[1fr_280px]">
+        <div className="space-y-3">
+          <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <h4 className="text-2xl font-semibold">{POSE_LABELS[activePose]}</h4>
-                <p className="mt-1 text-sm text-muted-foreground">{POSE_INSTRUCTIONS[activePose]}</p>
+                <p className="text-xs font-semibold uppercase text-primary">Captura facial automática</p>
+                <h4 className="mt-1 text-lg font-semibold">{POSE_LABELS[activePose]}</h4>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {selectedStudent ? `${selectedStudent.name} · ${POSE_INSTRUCTIONS[activePose]}` : "Salve ou selecione um aluno para habilitar a captura."}
+                </p>
               </div>
-              <span className="rounded-md bg-muted px-3 py-1 text-sm font-medium text-muted-foreground">
+              <span className="rounded-md bg-muted px-3 py-1 text-xs font-semibold text-muted-foreground">
                 {visualCount}/{CAPTURE_TARGET} imagens
               </span>
             </div>
 
-            <div className="mt-4 h-2 overflow-hidden rounded-full bg-muted">
+            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
               <div
                 className="h-full rounded-full bg-primary transition-all"
                 style={{ width: `${Math.round((visualCount / CAPTURE_TARGET) * 100)}%` }}
               />
             </div>
 
-            <div className="mt-4 rounded-md border border-border bg-background px-3 py-2 text-sm">
+            <div className="mt-3 rounded-md border border-border bg-background px-3 py-2 text-sm">
               {isCapturing ? (
                 <div className="space-y-1">
                   <p className="font-medium">Capturando imagem {Math.min(captureIndex + 1, CAPTURE_TARGET)} de {CAPTURE_TARGET}</p>
@@ -159,6 +154,7 @@ export function FaceCaptureWizard({
 
           <div className="flex flex-wrap gap-2">
             <Button
+              className="h-9 px-3"
               variant="secondary"
               onClick={() => {
                 setCaptureIndex(0);
@@ -170,6 +166,7 @@ export function FaceCaptureWizard({
               Resetar visual
             </Button>
             <Button
+              className="h-9 px-3"
               variant="secondary"
               disabled={!canGoNext}
               onClick={() => {

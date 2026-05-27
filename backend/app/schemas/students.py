@@ -61,6 +61,10 @@ class StudentListResponse(BaseModel):
     items: list[StudentRead]
 
 
+class StudentFaceStatusListResponse(BaseModel):
+    items: list[StudentFaceStatus]
+
+
 class ClassListResponse(BaseModel):
     items: list[ClassRead]
 

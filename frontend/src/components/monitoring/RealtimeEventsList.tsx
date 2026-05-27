@@ -13,10 +13,13 @@ function formatEventTime(timestamp?: string) {
 
 export function RealtimeEventsList({ events }: { events: MonitoringRealtimeEvent[] }) {
   return (
-    <section className="rounded-lg border border-border bg-card p-4 shadow-sm">
+    <section className="rounded-lg border border-border bg-card p-4 shadow-sm shadow-slate-200/60">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-base font-semibold">Eventos em tempo real</h3>
-        <span className="rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">{events.length}</span>
+        <div>
+          <p className="text-xs font-semibold uppercase text-muted-foreground">Linha do tempo</p>
+          <h3 className="mt-1 text-base font-semibold">Eventos em tempo real</h3>
+        </div>
+        <span className="rounded-md bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700">{events.length}</span>
       </div>
       <div className="mt-4 max-h-[420px] space-y-3 overflow-y-auto pr-1">
         {events.length === 0 ? (
@@ -25,7 +28,7 @@ export function RealtimeEventsList({ events }: { events: MonitoringRealtimeEvent
           </p>
         ) : null}
         {events.map((event, index) => (
-          <div key={`${event.type}-${event.timestamp ?? index}`} className="rounded-md border border-border bg-background p-3">
+          <div key={`${event.type}-${event.timestamp ?? index}`} className="rounded-md border border-border bg-background p-3 transition hover:border-cyan-200 hover:bg-cyan-50/35">
             <div className="flex items-center justify-between gap-3 text-xs">
               <span className="font-semibold text-foreground">{event.type}</span>
               <span className="text-muted-foreground">{formatEventTime(event.timestamp)}</span>

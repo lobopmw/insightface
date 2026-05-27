@@ -23,7 +23,7 @@ export function EmbeddingStatusCard({
         <h3 className="text-base font-semibold">Etapa 3 — Embeddings</h3>
       </div>
       <p className="mt-2 text-sm text-muted-foreground">
-        Gera o embedding médio com a lógica legada do InsightFace/ArcFace e sincroniza com a estrutura atual.
+        Gera o embedding médio com a lógica legada do ClassAI/ArcFace e sincroniza com a estrutura atual.
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <Button disabled={!canGenerate || isLoading || status?.embeddings_generated} onClick={onGenerate}>

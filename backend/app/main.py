@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     routes_auth,
+    routes_admin_catalog,
     routes_dashboard,
     routes_monitoring,
     routes_reports,
@@ -35,6 +36,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "service": settings.PROJECT_NAME}
 
     app.include_router(routes_auth.router, prefix=settings.API_PREFIX)
+    app.include_router(routes_admin_catalog.router, prefix=settings.API_PREFIX)
     app.include_router(routes_students.router, prefix=settings.API_PREFIX)
     app.include_router(routes_monitoring.router, prefix=settings.API_PREFIX)
     app.include_router(routes_reports.router, prefix=settings.API_PREFIX)

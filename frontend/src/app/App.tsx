@@ -20,12 +20,20 @@ const pages: Record<AppPage, JSX.Element> = {
 
 export function App() {
   const currentPage = useNavigationStore((state) => state.currentPage);
+  const setCurrentPage = useNavigationStore((state) => state.setCurrentPage);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const user = useAuthStore((state) => state.user);
   const restoreSession = useAuthStore((state) => state.restoreSession);
 
   useEffect(() => {
     void restoreSession();
   }, [restoreSession]);
+
+  useEffect(() => {
+    if (user?.role !== "admin" && currentPage === "students") {
+      setCurrentPage("dashboard");
+    }
+  }, [currentPage, setCurrentPage, user?.role]);
 
   if (!isAuthenticated) {
     return <Login />;

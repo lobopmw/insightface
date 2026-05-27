@@ -9,5 +9,6 @@ export type {
   StudentClass,
   StudentCreatePayload,
   StudentFaceStatus,
+  StudentFaceStatusListResponse,
   StudentListResponse,
 } from "@/types/student";

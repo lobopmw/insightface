@@ -8,6 +8,7 @@ import type {
   Student,
   StudentCreatePayload,
   StudentFaceStatus,
+  StudentFaceStatusListResponse,
   StudentListResponse,
 } from "@/types/student";
 
@@ -48,6 +49,10 @@ export function deactivateStudent(token: string, studentId: string) {
 
 export function getStudentFaceStatus(token: string, studentId: string) {
   return apiRequest<StudentFaceStatus>(`/students/${studentId}/face-status`, { token });
+}
+
+export function listStudentsFaceStatuses(token: string) {
+  return apiRequest<StudentFaceStatusListResponse>("/students/face-status", { token });
 }
 
 export function uploadStudentFaceImages(token: string, studentId: string, pose: PoseKey, files: Blob[]) {

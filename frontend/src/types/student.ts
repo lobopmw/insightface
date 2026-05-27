@@ -43,6 +43,10 @@ export type StudentFaceStatus = Record<PoseKey, PoseStatus> & {
   embeddings_generated: boolean;
 };
 
+export type StudentFaceStatusListResponse = {
+  items: StudentFaceStatus[];
+};
+
 export type FaceImageUploadResponse = {
   student_id: string;
   pose: PoseKey;

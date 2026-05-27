@@ -12,6 +12,7 @@ from app.schemas.students import (
     EmbeddingGenerationResponse,
     FaceImageUploadResponse,
     StudentFaceStatus,
+    StudentFaceStatusListResponse,
     StudentCreate,
     StudentListResponse,
     StudentRead,
@@ -66,6 +67,16 @@ def create_student_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> StudentRead:
     return create_student(db, current_user, payload)
+
+
+@router.get("/face-status", response_model=StudentFaceStatusListResponse)
+def list_student_face_status_route(
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    class_id: Annotated[int | None, Query()] = None,
+) -> StudentFaceStatusListResponse:
+    students = list_students_for_user(db, current_user, class_id=class_id)
+    return StudentFaceStatusListResponse(items=[get_face_status(db, student) for student in students])
 
 
 @router.get("/{student_id}", response_model=StudentRead)

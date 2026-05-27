@@ -27,9 +27,15 @@ class MonitoringClass(BaseModel):
     identificador: str | None = None
 
 
+class MonitoringAssignment(BaseModel):
+    subject_id: int
+    class_id: int
+
+
 class MonitoringOptionsResponse(BaseModel):
     subjects: list[MonitoringSubject]
     classes: list[MonitoringClass]
+    assignments: list[MonitoringAssignment] = []
     lesson_types: list[str]
 
 
