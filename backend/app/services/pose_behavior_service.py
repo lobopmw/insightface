@@ -11,9 +11,9 @@ EXIT_SLEEP_FRAMES = 10
 ENTER_QUESTION_FRAMES = 4
 ENTER_ATTENTIVE_FRAMES = 5
 ENTER_AGITATED_FRAMES = 3
-ENTER_DISTRACTED_FRAMES = 3
+ENTER_DISTRACTED_FRAMES = int(os.getenv("ENTER_DISTRACTED_FRAMES", "3"))
 ENTER_UNDETERMINED_FRAMES = 2
-DISTRACTED_TIMEOUT_SECONDS = 2.5
+DISTRACTED_TIMEOUT_SECONDS = float(os.getenv("DISTRACTED_TIMEOUT_SECONDS", "2.5"))
 DISPLAY_BOX_MIN_KEYPOINT_CONF = 0.22
 DISPLAY_BOX_MIN_WIDTH = 56.0
 
@@ -121,8 +121,14 @@ class PoseBehaviorService:
                 fallback_box = detector_box or person_box
                 if fallback_box is None:
                     continue
+                if self._is_back_facing_person(person_keypoints, pose_conf_threshold):
+                    continue
+                if not self._has_front_or_side_face(person_keypoints, pose_conf_threshold):
+                    continue
 
                 face = self._match_face_to_person(fallback_box, faces)
+                if face is None:
+                    continue
                 student_name = face.student_name if face is not None else "Desconhecido"
                 confidence = face.confidence if face is not None and face.recognized else 0.0
                 recognized = bool(face is not None and face.recognized)
@@ -169,14 +175,13 @@ class PoseBehaviorService:
                 r_ear = person_keypoints[4]
                 if nose[2] > threshold or (ls[2] > threshold and rs[2] > threshold):
                     lateral_status = self._is_lateral_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=threshold)
-                    back_status = self._is_back_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=threshold)
                     sleep_like_posture = False
                     if have_all:
                         sleep_metrics = self._analyze_sleep_posture(nose, ls, rs, le, re, lw, rw, threshold)
                         sleep_like_posture = sleep_metrics["strong_sleep"] or sleep_metrics["head_supported"]
                     distracted = self._check_distracted_status(
                         behavior_key,
-                        (lateral_status or back_status) and not sleep_like_posture,
+                        lateral_status and not sleep_like_posture,
                         timeout=DISTRACTED_TIMEOUT_SECONDS,
                     )
                     if distracted:
@@ -410,7 +415,60 @@ class PoseBehaviorService:
         frontal_face_missing = nose[2] < conf_thr and l_eye[2] < conf_thr and r_eye[2] < conf_thr
         ears_missing = l_ear[2] < conf_thr and r_ear[2] < conf_thr
         shoulder_balance = abs(ls[1] - rs[1]) < max(18.0, 0.35 * shoulder_width)
-        return bool(frontal_face_missing and ears_missing and shoulder_balance)
+        if frontal_face_missing and ears_missing and shoulder_balance:
+            return True
+
+        face_conf = max(float(nose[2]), float(l_eye[2]), float(r_eye[2]))
+        ear_conf = max(float(l_ear[2]), float(r_ear[2]))
+        shoulder_center_x = (float(ls[0]) + float(rs[0])) / 2.0
+        head_x_candidates = [float(point[0]) for point in (nose, l_eye, r_eye, l_ear, r_ear) if float(point[2]) > 0.08]
+        head_center_x = sum(head_x_candidates) / len(head_x_candidates) if head_x_candidates else shoulder_center_x
+        head_centered = abs(head_center_x - shoulder_center_x) / max(1.0, shoulder_width) < 0.24
+        weak_frontal_face = face_conf < conf_thr + 0.18
+        visible_back_head = ear_conf > conf_thr + 0.35
+        return bool(shoulder_balance and head_centered and weak_frontal_face and visible_back_head)
+
+    def _is_back_facing_person(self, person_keypoints, threshold: float) -> bool:
+        if person_keypoints.shape[0] <= 6:
+            return False
+        nose = person_keypoints[0]
+        l_eye = person_keypoints[1]
+        r_eye = person_keypoints[2]
+        l_ear = person_keypoints[3]
+        r_ear = person_keypoints[4]
+        ls = person_keypoints[5]
+        rs = person_keypoints[6]
+        return self._is_back_view(nose, l_eye, r_eye, l_ear, r_ear, ls, rs, conf_thr=threshold)
+
+    def _has_front_or_side_face(self, person_keypoints, threshold: float) -> bool:
+        if person_keypoints.shape[0] <= 6:
+            return False
+
+        nose = person_keypoints[0]
+        l_eye = person_keypoints[1]
+        r_eye = person_keypoints[2]
+        l_ear = person_keypoints[3]
+        r_ear = person_keypoints[4]
+        ls = person_keypoints[5]
+        rs = person_keypoints[6]
+
+        shoulder_width = float(abs(ls[0] - rs[0]))
+        if shoulder_width < 35.0:
+            return False
+
+        front_face = (
+            float(nose[2]) > threshold + 0.08
+            and float(l_eye[2]) > threshold
+            and float(r_eye[2]) > threshold
+        )
+        side_face = (
+            float(nose[2]) > threshold + 0.16
+            and (
+                max(float(l_eye[2]), float(r_eye[2])) > threshold + 0.16
+                or max(float(l_ear[2]), float(r_ear[2])) > threshold + 0.48
+            )
+        )
+        return bool(front_face or side_face)
 
     def _check_distracted_status(self, name: str, is_distracted_pose: bool, timeout: float) -> str | None:
         now = time.time()

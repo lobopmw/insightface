@@ -38,6 +38,7 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-before-production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      RTSP_URL: ${RTSP_URL:-}
       RELAY_HOST: ${RELAY_HOST:-127.0.0.1}
       RELAY_PORT: ${RELAY_PORT:-5555}
     ports:
@@ -45,6 +46,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ../data:/app/data:ro
     command:
       [
         "sh",

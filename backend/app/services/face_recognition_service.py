@@ -1,15 +1,23 @@
 import os
-import sys
+import pickle
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 
 
-FACE_RECOGNITION_BASE_THRESHOLD = 0.45
-FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.39
-FACE_RECOGNITION_SMALL_THRESHOLD = 0.30
-FACE_RECOGNITION_TINY_THRESHOLD = 0.22
-FACE_RECOGNITION_MIN_MARGIN = 0.015
-FACE_RECOGNITION_TINY_MARGIN = 0.0025
+FACE_RECOGNITION_BASE_THRESHOLD = 0.46
+FACE_RECOGNITION_MEDIUM_THRESHOLD = 0.41
+FACE_RECOGNITION_SMALL_THRESHOLD = 0.34
+FACE_RECOGNITION_TINY_THRESHOLD = 0.28
+FACE_RECOGNITION_MIN_MARGIN = 0.035
+FACE_RECOGNITION_TINY_MARGIN = 0.018
+FACE_RECOGNITION_MIN_FACE_AREA = 1600
+FACE_DETECTION_SIZE = int(os.getenv("FACE_DETECTION_SIZE", "960"))
+FACE_DETECTION_THRESHOLD = float(os.getenv("FACE_DETECTION_THRESHOLD", "0.35"))
+SERVICE_PATH = Path(__file__).resolve()
+PROJECT_ROOT = SERVICE_PATH.parents[2] if (SERVICE_PATH.parents[2] / "data").exists() else SERVICE_PATH.parents[3]
+EMBEDDINGS_PATH = PROJECT_ROOT / "data" / "embeddings.npy"
+NAMES_PATH = PROJECT_ROOT / "data" / "names.pkl"
 
 
 @dataclass
@@ -148,7 +156,7 @@ class FaceRecognitionService:
             from insightface.app import FaceAnalysis
 
             self._app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-            self._app.prepare(ctx_id=-1, det_size=(640, 640))
+            self._app.prepare(ctx_id=-1, det_size=(FACE_DETECTION_SIZE, FACE_DETECTION_SIZE), det_thresh=FACE_DETECTION_THRESHOLD)
             self._load_embeddings_locked()
         except Exception as exc:  # pragma: no cover - depends on model runtime
             self._load_error = f"insightface_unavailable: {exc}"
@@ -172,15 +180,13 @@ class FaceRecognitionService:
         if self._np is None:
             return
 
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-        src_path = os.path.join(project_root, "src")
-        if src_path not in sys.path:
-            sys.path.append(src_path)
-
         try:
-            from register_face_multi_images_avg import load_insightface_data
+            if not EMBEDDINGS_PATH.exists() or not NAMES_PATH.exists():
+                raise FileNotFoundError(f"{EMBEDDINGS_PATH} or {NAMES_PATH}")
 
-            embeddings, names = load_insightface_data()
+            embeddings = self._np.load(EMBEDDINGS_PATH)
+            with NAMES_PATH.open("rb") as names_file:
+                names = pickle.load(names_file)
             if len(embeddings) == 0:
                 self._known_embeddings_norm = None
                 self._known_names = []
@@ -211,6 +217,9 @@ class FaceRecognitionService:
 
         x1, y1, x2, y2 = face.bbox.astype(int)
         face_area = max(1, (x2 - x1) * (y2 - y1))
+        if face_area < FACE_RECOGNITION_MIN_FACE_AREA:
+            return "Desconhecido", best_score, False
+
         if face_area < 3500:
             acceptance_threshold = FACE_RECOGNITION_TINY_THRESHOLD
             min_margin = FACE_RECOGNITION_TINY_MARGIN

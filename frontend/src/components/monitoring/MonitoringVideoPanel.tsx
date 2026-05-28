@@ -12,7 +12,7 @@ export function MonitoringVideoPanel({ cameraStatus, isActive, websocketStatus }
   const isWebSocketConnected = websocketStatus === "connected";
 
   return (
-    <section className="relative aspect-video min-h-[320px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950 text-white shadow-sm shadow-slate-300/60">
+    <section className="relative aspect-video min-h-[420px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950 text-white shadow-sm shadow-slate-300/60 xl:min-h-[680px]">
       <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2">
         <span className="inline-flex items-center gap-2 rounded-md bg-black/45 px-3 py-1.5 text-xs font-medium backdrop-blur">
           <Camera className="h-3.5 w-3.5" />

@@ -1,16 +1,16 @@
 import { CircleStop, Play, RefreshCw, SlidersHorizontal, Video } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { RealtimeEventsList } from "@/components/monitoring/RealtimeEventsList";
 import { MonitoringStatusPanel } from "@/components/monitoring/MonitoringStatusPanel";
 import { MonitoringVideoPanel } from "@/components/monitoring/MonitoringVideoPanel";
 import { Button } from "@/components/ui/Button";
 import { useMonitoring } from "@/hooks/useMonitoring";
 import { useMonitoringOptions } from "@/hooks/useMonitoringOptions";
+import { formatMonitoringError } from "@/lib/monitoringErrors";
 
 export function Monitoring() {
   const { data: options, isLoading: isLoadingOptions } = useMonitoringOptions();
-  const { error, events, isActive, isLoading, refreshStatus, start, status, stop, websocketStatus } = useMonitoring();
+  const { error, isActive, isLoading, refreshStatus, start, status, stop, websocketStatus } = useMonitoring();
   const [subjectId, setSubjectId] = useState("");
   const [classId, setClassId] = useState("");
   const [lessonType, setLessonType] = useState("Exposição");
@@ -52,6 +52,8 @@ export function Monitoring() {
   const selectedClass = availableClasses.find((classItem) => String(classItem.id) === classId);
   const canStart = Boolean(subjectId && classId && lessonType && !isActive && !isLoading);
   const canStop = Boolean(isActive && !isLoading);
+  const monitoringError = error ?? status.error;
+  const monitoringErrorMessage = formatMonitoringError(monitoringError);
 
   return (
     <div className="space-y-6">
@@ -150,15 +152,16 @@ export function Monitoring() {
         </div>
       </section>
 
-      {error || status.error ? (
-        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error ?? status.error}</p>
+      {monitoringErrorMessage ? (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" title={monitoringError ?? undefined}>
+          {monitoringErrorMessage}
+        </p>
       ) : null}
 
       <MonitoringStatusPanel isActive={isActive} status={status} />
 
-      <section className="grid gap-4 xl:grid-cols-[1fr_380px]">
+      <section>
         <MonitoringVideoPanel cameraStatus={status.camera_status} isActive={isActive} websocketStatus={websocketStatus} />
-        <RealtimeEventsList events={events} />
       </section>
     </div>
   );

@@ -1,5 +1,6 @@
 import asyncio
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
@@ -24,6 +25,11 @@ from app.services.rtsp_capture_service import RTSPCaptureService
 
 
 LESSON_TYPES = ["Exposição", "Atividade", "Prova", "Revisão", "Outro"]
+BEHAVIOR_SWITCH_CONFIRMATIONS = 3
+DETECTION_HOLD_SECONDS = 10.0
+IDENTITY_PROPAGATION_SECONDS = 8.0
+IDENTITY_PROPAGATION_MIN_IOU = 0.12
+IDENTITY_PROPAGATION_MAX_CENTER_DISTANCE = 0.45
 
 
 class MonitoringService:
@@ -45,6 +51,10 @@ class MonitoringService:
         self.timestamp: datetime | None = None
         self._event_task: asyncio.Task | None = None
         self._latest_detections: list[FaceRecognitionResult | BehaviorTrack] = []
+        self._display_detection: FaceRecognitionResult | BehaviorTrack | None = None
+        self._display_seen_at = 0.0
+        self._display_candidate_key: tuple[str, str] | None = None
+        self._display_candidate_count = 0
 
     async def start(
         self,
@@ -66,6 +76,10 @@ class MonitoringService:
         self.behavior = "Aguardando YOLO"
         self.confidence = 0.0
         self._latest_detections = []
+        self._display_detection = None
+        self._display_seen_at = 0.0
+        self._display_candidate_key = None
+        self._display_candidate_count = 0
         self.timestamp = datetime.now(UTC)
         await monitoring_event_hub.publish(
             "monitoring.starting",
@@ -126,6 +140,10 @@ class MonitoringService:
         self.behavior = "Aguardando YOLO"
         self.confidence = 0.0
         self._latest_detections = []
+        self._display_detection = None
+        self._display_seen_at = 0.0
+        self._display_candidate_key = None
+        self._display_candidate_count = 0
         self.timestamp = datetime.now(UTC)
 
         await monitoring_event_hub.publish(
@@ -183,6 +201,9 @@ class MonitoringService:
 
             self._latest_detections = behavior_tracks or face_detections
             best_detection = max(self._latest_detections, key=lambda item: item.confidence, default=None)
+            display_detection = self._stable_display_detection(best_detection)
+            if display_detection is not None:
+                self._latest_detections = self._replace_matching_detection(self._latest_detections, display_detection)
             recognized_students_now = len(
                 {
                     detection.student_name
@@ -190,14 +211,14 @@ class MonitoringService:
                     if detection.recognized and detection.student_name != "Desconhecido"
                 }
             )
-            if best_detection is None:
+            if display_detection is None:
                 self.student_name = "Aguardando identificação"
                 self.confidence = 0.0
                 self.behavior = "Indeterminado"
             else:
-                self.student_name = best_detection.student_name
-                self.confidence = best_detection.confidence if best_detection.recognized else 0.0
-                self.behavior = getattr(best_detection, "behavior", "Indeterminado")
+                self.student_name = display_detection.student_name
+                self.confidence = display_detection.confidence if display_detection.recognized else 0.0
+                self.behavior = getattr(display_detection, "behavior", "Indeterminado")
             self.timestamp = datetime.now(UTC)
             await monitoring_event_hub.publish(
                 "behavior_event",
@@ -211,11 +232,131 @@ class MonitoringService:
                     "faces_detected": len(face_detections),
                     "people_detected": len(behavior_tracks),
                     "recognized_students_now": recognized_students_now,
-                    "bbox": best_detection.bbox if best_detection else None,
+                    "bbox": display_detection.bbox if display_detection else None,
                     "timestamp": self.timestamp.isoformat(),
                 },
             )
             await asyncio.sleep(1.0)
+
+    def _stable_display_detection(
+        self,
+        candidate: FaceRecognitionResult | BehaviorTrack | None,
+    ) -> FaceRecognitionResult | BehaviorTrack | None:
+        now = time.monotonic()
+        if candidate is None:
+            if self._display_detection is not None and now - self._display_seen_at <= DETECTION_HOLD_SECONDS:
+                return self._display_detection
+            self._display_detection = None
+            self._display_candidate_key = None
+            self._display_candidate_count = 0
+            return None
+
+        propagated = self._propagate_current_identity(candidate, now)
+        if propagated is not candidate:
+            self._display_detection = propagated
+            self._display_seen_at = now
+            self._display_candidate_key = None
+            self._display_candidate_count = 0
+            return self._display_detection
+
+        candidate_key = (candidate.student_name, getattr(candidate, "behavior", "Indeterminado"))
+        current_key = (
+            (self._display_detection.student_name, getattr(self._display_detection, "behavior", "Indeterminado"))
+            if self._display_detection is not None
+            else None
+        )
+        if current_key is None or candidate_key == current_key:
+            self._display_detection = candidate
+            self._display_seen_at = now
+            self._display_candidate_key = None
+            self._display_candidate_count = 0
+            return self._display_detection
+
+        if candidate_key == self._display_candidate_key:
+            self._display_candidate_count += 1
+        else:
+            self._display_candidate_key = candidate_key
+            self._display_candidate_count = 1
+
+        if self._display_candidate_count >= BEHAVIOR_SWITCH_CONFIRMATIONS:
+            self._display_detection = candidate
+            self._display_seen_at = now
+            self._display_candidate_key = None
+            self._display_candidate_count = 0
+
+        return self._display_detection
+
+    def _propagate_current_identity(
+        self,
+        candidate: FaceRecognitionResult | BehaviorTrack,
+        now: float,
+    ) -> FaceRecognitionResult | BehaviorTrack:
+        current = self._display_detection
+        if current is None or not current.recognized:
+            return candidate
+        if candidate.recognized or candidate.student_name != "Desconhecido":
+            return candidate
+        if now - self._display_seen_at > IDENTITY_PROPAGATION_SECONDS:
+            return candidate
+        if not self._is_same_detection_area(current.bbox, candidate.bbox):
+            return candidate
+
+        confidence = max(0.0, min(float(current.confidence) * 0.96, float(current.confidence)))
+        return replace(
+            candidate,
+            student_name=current.student_name,
+            confidence=confidence,
+            recognized=True,
+        )
+
+    def _replace_matching_detection(
+        self,
+        detections: list[FaceRecognitionResult | BehaviorTrack],
+        display_detection: FaceRecognitionResult | BehaviorTrack,
+    ) -> list[FaceRecognitionResult | BehaviorTrack]:
+        for index, detection in enumerate(detections):
+            if detection is display_detection or self._is_same_detection_area(detection.bbox, display_detection.bbox):
+                updated = list(detections)
+                updated[index] = display_detection
+                return updated
+        return [display_detection, *detections]
+
+    def _is_same_detection_area(
+        self,
+        first: tuple[int, int, int, int],
+        second: tuple[int, int, int, int],
+    ) -> bool:
+        iou = self._box_iou(first, second)
+        if iou >= IDENTITY_PROPAGATION_MIN_IOU:
+            return True
+
+        fcx, fcy, fdiag = self._box_center_and_diag(first)
+        scx, scy, sdiag = self._box_center_and_diag(second)
+        distance = ((fcx - scx) ** 2 + (fcy - scy) ** 2) ** 0.5
+        scale = max(fdiag, sdiag, 1.0)
+        return distance / scale <= IDENTITY_PROPAGATION_MAX_CENTER_DISTANCE
+
+    def _box_iou(self, first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:
+        ax1, ay1, ax2, ay2 = first
+        bx1, by1, bx2, by2 = second
+        ix1 = max(ax1, bx1)
+        iy1 = max(ay1, by1)
+        ix2 = min(ax2, bx2)
+        iy2 = min(ay2, by2)
+        inter_width = max(0, ix2 - ix1)
+        inter_height = max(0, iy2 - iy1)
+        intersection = inter_width * inter_height
+        if intersection <= 0:
+            return 0.0
+        first_area = max(1, (ax2 - ax1) * (ay2 - ay1))
+        second_area = max(1, (bx2 - bx1) * (by2 - by1))
+        return intersection / max(1, first_area + second_area - intersection)
+
+    def _box_center_and_diag(self, box: tuple[int, int, int, int]) -> tuple[float, float, float]:
+        x1, y1, x2, y2 = box
+        width = max(1, x2 - x1)
+        height = max(1, y2 - y1)
+        return (x1 + width / 2.0, y1 + height / 2.0, (width * width + height * height) ** 0.5)
 
     def video_feed(self):
         while self.capture_service.get_status().status != "idle":
