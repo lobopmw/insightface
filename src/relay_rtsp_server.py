@@ -1,9 +1,3 @@
-# relay_rtsp_server.py
-# Servidor que lê RTSP (Hikvision) e envia SEMPRE o frame mais novo via TCP.
-# Agora envia SOMENTE quando chega um frame novo e pode limitar com --send-fps.
-# Uso:
-#   python relay_rtsp_server.py "rtsp://admin:admin123@172.16.5.250:554/Streaming/Channels/101" --host 0.0.0.0 --port 5555 --quality 85 --send-fps 15
-
 import os
 # Defina as opções ANTES do import cv2 (baixa latência no FFMPEG)
 os.environ.pop("OPENCV_FFMPEG_CAPTURE_OPTIONS", None)
@@ -15,6 +9,7 @@ import struct
 import threading
 import argparse
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def open_capture(rtsp_url: str, width=None, height=None):
     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)  # força FFMPEG
@@ -26,22 +21,74 @@ def open_capture(rtsp_url: str, width=None, height=None):
     if height: cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     return cap
 
-def start_relay(rtsp_url: str, host="0.0.0.0", port=5555, quality=85, width=None, height=None, send_fps=None):
+def start_relay(
+    rtsp_url: str,
+    host="0.0.0.0",
+    port=5555,
+    http_port=8555,
+    quality=85,
+    width=None,
+    height=None,
+    send_fps=None,
+):
     cap = open_capture(rtsp_url, width, height)
 
     last_frame = [None]
     last_id = [0]
     lock = threading.Lock()
     running = True
+    reconnect_fail_sleep = 1.0
+    max_consecutive_failures = 3
+
+    def clear_last_frame():
+        with lock:
+            last_frame[0] = None
+
+    def reopen_capture(reason: str):
+        nonlocal cap
+        clear_last_frame()
+        try:
+            cap.release()
+        except Exception:
+            pass
+
+        while running:
+            try:
+                print(f"[relay] Reabrindo RTSP: {reason}")
+                cap = open_capture(rtsp_url, width, height)
+                for _ in range(3):
+                    ok, _ = cap.read()
+                    if ok:
+                        break
+                print("[relay] RTSP reaberto com sucesso")
+                return
+            except Exception as exc:
+                print(f"[relay] Falha ao reabrir RTSP: {exc}")
+                time.sleep(reconnect_fail_sleep)
 
     def grabber():
+        nonlocal cap
         # descarta alguns frames iniciais
-        for _ in range(3): cap.read()
+        for _ in range(3):
+            cap.read()
+        consecutive_failures = 0
+        last_ok_at = time.time()
         while running:
             ok, frame = cap.read()
-            if not ok:
-                time.sleep(0.01)
+            now = time.time()
+            if not ok or frame is None:
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures or (now - last_ok_at) > 3.0:
+                    reopen_capture(
+                        f"{consecutive_failures} falhas consecutivas de leitura e {now - last_ok_at:.1f}s sem frame"
+                    )
+                    consecutive_failures = 0
+                    last_ok_at = time.time()
+                else:
+                    time.sleep(0.05)
                 continue
+            consecutive_failures = 0
+            last_ok_at = now
             with lock:
                 last_frame[0] = frame
                 last_id[0] += 1  # marca "chegou frame novo"
@@ -84,6 +131,53 @@ def start_relay(rtsp_url: str, host="0.0.0.0", port=5555, quality=85, width=None
             try: conn.close()
             except: pass
 
+    def encode_latest_jpeg(prev_id):
+        with lock:
+            if last_id[0] == prev_id or last_frame[0] is None:
+                return prev_id, None
+            current_id = last_id[0]
+            frame = last_frame[0].copy()
+        ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+        if not ok:
+            return prev_id, None
+        return current_id, jpg.tobytes()
+
+    class MjpegHandler(BaseHTTPRequestHandler):
+        server_version = "InsightFaceRelay/1.0"
+
+        def do_GET(self):
+            if self.path not in ("/", "/mjpeg", "/mjpeg/"):
+                self.send_error(404, "Endpoint nao encontrado")
+                return
+
+            self.send_response(200)
+            self.send_header("Age", "0")
+            self.send_header("Cache-Control", "no-cache, private")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+
+            sent_id = -1
+            try:
+                while True:
+                    sent_id, jpeg = encode_latest_jpeg(sent_id)
+                    if jpeg is None:
+                        time.sleep(0.03)
+                        continue
+                    self.wfile.write(b"--frame\r\n")
+                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                    self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
+                    self.wfile.write(jpeg)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception:
+                pass
+
+        def log_message(self, format, *args):
+            return
+
     t = threading.Thread(target=grabber, daemon=True)
     t.start()
 
@@ -91,7 +185,11 @@ def start_relay(rtsp_url: str, host="0.0.0.0", port=5555, quality=85, width=None
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
     srv.listen(2)
+    http_server = ThreadingHTTPServer((host, http_port), MjpegHandler)
+    http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    http_thread.start()
     print(f"[relay] Servindo frames em tcp://{host}:{port}")
+    print(f"[relay] Servindo stream MJPEG em http://{host}:{http_port}/mjpeg")
     print(f"[relay] Capturando de: {rtsp_url}")
     if send_fps:
         print(f"[relay] Limitando envio a ~{send_fps} fps")
@@ -108,6 +206,11 @@ def start_relay(rtsp_url: str, host="0.0.0.0", port=5555, quality=85, width=None
         try: srv.close()
         except: pass
         try:
+            http_server.shutdown()
+            http_server.server_close()
+        except:
+            pass
+        try:
             running = False
             t.join(timeout=1.0)
         except: pass
@@ -119,12 +222,13 @@ def main():
     ap.add_argument("rtsp", help="URL RTSP (ex.: rtsp://user:pass@IP:554/Streaming/Channels/101)")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=5555)
-    ap.add_argument("--quality", type=int, default=85, help="Qualidade JPEG (50–95). 85 = bom e rápido")
+    ap.add_argument("--http-port", type=int, default=8555)
+    ap.add_argument("--quality", type=int, default=70, help="Qualidade JPEG (50–95). 70 = menor latencia com qualidade suficiente")
     ap.add_argument("--width", type=int, default=None)
     ap.add_argument("--height", type=int, default=None)
-    ap.add_argument("--send-fps", type=int, default=None, help="Limitar FPS de envio (ex.: 15, 20, 25). Se omitido, envia o mais rápido possível, porém só quando chega frame novo.")
+    ap.add_argument("--send-fps", type=int, default=24, help="Limitar FPS de envio (ex.: 15, 20, 24, 30). 24 costuma dar boa fluidez com baixa latencia.")
     args = ap.parse_args()
-    start_relay(args.rtsp, host=args.host, port=args.port, quality=args.quality,
+    start_relay(args.rtsp, host=args.host, port=args.port, http_port=args.http_port, quality=args.quality,
                 width=args.width, height=args.height, send_fps=args.send_fps)
 
 if __name__ == "__main__":

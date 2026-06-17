@@ -1,0 +1,135 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 2 /Kids [5 0 R 7 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Length 2970 >>
+stream
+BT
+/F1 11 Tf
+1 0 0 1 48 800 Tm
+(Relatorio de Alteracoes do Monitoramento - 26/03/2026) Tj
+0 -15 Td () Tj
+0 -15 Td (- Projeto: .insightface) Tj
+0 -15 Td (- Objetivo do dia: estabilizar o monitoramento no Streamlit e refinar a logica de) Tj
+0 -15 Td (  classificacao de comportamentos.) Tj
+0 -15 Td () Tj
+0 -15 Td (1. Arquivos alterados) Tj
+0 -15 Td () Tj
+0 -15 Td (- src/insightface_classroom.py) Tj
+0 -15 Td (- src/behavior_episode_service.py) Tj
+0 -15 Td () Tj
+0 -15 Td (2. Ajustes estruturais no monitoramento) Tj
+0 -15 Td () Tj
+0 -15 Td (- Substituicao do caminho de render que estava provocando instabilidade no Streamlit) Tj
+0 -15 Td (  durante o monitoramento ao vivo.) Tj
+0 -15 Td (- Reducao do FPS efetivo do loop principal para 12 FPS, com foco em estabilidade e menor) Tj
+0 -15 Td (  pressao sobre CPU, GPU e UI.) Tj
+0 -15 Td (- Render do frame final via JPEG inline em base64 dentro do placeholder do Streamlit para) Tj
+0 -15 Td (  evitar problemas com memory_media_file_storage.) Tj
+0 -15 Td (- Retomada de um fluxo de monitoramento mais proximo da branch v3_postgres, com) Tj
+0 -15 Td (  VideoStream e DetectorWorker controlados localmente no loop principal.) Tj
+0 -15 Td () Tj
+0 -15 Td (3. Persistencia e tolerancia a falhas) Tj
+0 -15 Td () Tj
+0 -15 Td (- BehaviorEpisodeManager passou a capturar excecoes de persistencia ao fechar episodios.) Tj
+0 -15 Td (- Falhas de banco passaram a ser registradas em last_persist_error e no log, sem derrubar) Tj
+0 -15 Td (  o monitoramento.) Tj
+0 -15 Td (- Isso reduz o impacto de erros temporarios como falha de resolucao do host do banco) Tj
+0 -15 Td (  durante flush_all ou persistencia de episodios.) Tj
+0 -15 Td () Tj
+0 -15 Td (4. Ajustes na logica de Distraido) Tj
+0 -15 Td () Tj
+0 -15 Td (- Criada a constante DISTRACTED_TIMEOUT_SECONDS = 2.5 para reduzir o tempo necessario para) Tj
+0 -15 Td (  consolidar o estado Distraido.) Tj
+0 -15 Td (- A chave de acompanhamento de distraido deixou de depender exclusivamente de) Tj
+0 -15 Td (  reconhecimento facial; agora pessoas Desconhecido tambem podem entrar em debounce usando) Tj
+0 -15 Td (  pid_<id>.) Tj
+0 -15 Td (- A heuristica lateral continua ativa, mas passou a aceitar cenarios em que o nariz some e) Tj
+0 -15 Td (  os ombros ainda estao visiveis.) Tj
+0 -15 Td (- Foi adicionada a funcao is_back_view\(...\) para marcar postura de costas como outro) Tj
+0 -15 Td (  gatilho de Distraido quando os ombros estao confiaveis e os pontos frontais do rosto) Tj
+0 -15 Td (  desaparecem.) Tj
+0 -15 Td () Tj
+0 -15 Td (5. Ajustes na logica de Perguntando) Tj
+0 -15 Td () Tj
+0 -15 Td (- A deteccao de Perguntando ficou mais restritiva.) Tj
+0 -15 Td (- Agora a regra exige confianca suficiente em punho e cotovelo, e a mao precisa estar) Tj
+0 -15 Td (  acima do nariz, acima da linha dos ombros e acima do proprio cotovelo.) Tj
+0 -15 Td (- A intencao foi evitar falsos positivos de Perguntando em posturas laterais, oclusoes ou) Tj
+0 -15 Td (  poses degradadas.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+6 0 obj
+<< /Length 2247 >>
+stream
+BT
+/F1 11 Tf
+1 0 0 1 48 800 Tm
+() Tj
+0 -15 Td (6. Ajustes na logica de Dormindo) Tj
+0 -15 Td () Tj
+0 -15 Td (- Dormindo deixou de depender apenas de cabeca baixa ou proximidade do nariz ao cotovelo.) Tj
+0 -15 Td (- Foi adicionado um criterio geometrico de apoio: o pulso precisa estar suficientemente) Tj
+0 -15 Td (  proximo do respectivo cotovelo em X e Y.) Tj
+0 -15 Td (- Se houver cabeca baixa sem indicio de apoio de braco/mao, a regra agora retorna) Tj
+0 -15 Td (  Distraido em vez de Dormindo.) Tj
+0 -15 Td (- Esse ajuste foi motivado por um falso positivo observado em imagem real, onde o aluno) Tj
+0 -15 Td (  estava inclinado para baixo, mas nao em postura compativel com sono.) Tj
+0 -15 Td () Tj
+0 -15 Td (7. Logica geometrica incorporada) Tj
+0 -15 Td () Tj
+0 -15 Td (- Distraido lateral: usa nariz, olhos, orelhas e ombros para inferir orientacao lateral da) Tj
+0 -15 Td (  cabeca.) Tj
+0 -15 Td (- Distraido de costas: usa largura e simetria dos ombros mais ausencia de) Tj
+0 -15 Td (  nariz/olhos/orelhas frontais.) Tj
+0 -15 Td (- Dormindo: usa cabeca baixa, bracos baixos, cotovelos baixos e proximidade pulso-cotovelo) Tj
+0 -15 Td (  como sinal de apoio.) Tj
+0 -15 Td (- Perguntando: usa elevacao real das maos em relacao ao nariz, ombros e cotovelos.) Tj
+0 -15 Td () Tj
+0 -15 Td (8. Impacto esperado apos as alteracoes) Tj
+0 -15 Td () Tj
+0 -15 Td (- Menor flicker e menor risco de esgotamento de arquivos ou midias no Streamlit.) Tj
+0 -15 Td (- Monitoramento menos sensivel a falhas temporarias de banco.) Tj
+0 -15 Td (- Menos falsos positivos de Perguntando quando a pessoa esta de lado.) Tj
+0 -15 Td (- Cobertura de Distraido para pose lateral e tambem para pose de costas.) Tj
+0 -15 Td (- Menos falsos positivos de Dormindo quando houver apenas cabeca baixa sem apoio.) Tj
+0 -15 Td () Tj
+0 -15 Td (9. Pontos que ainda merecem validacao pratica) Tj
+0 -15 Td () Tj
+0 -15 Td (- Calibracao fina do limiar de postura de costas em pessoas distantes da camera.) Tj
+0 -15 Td (- Calibracao fina dos limiares de proximidade pulso-cotovelo para Dormindo.) Tj
+0 -15 Td (- Verificacao em diferentes iluminacoes, oclusoes e distancias.) Tj
+0 -15 Td (- Validacao do reconhecimento de nomes em paralelo com a classificacao comportamental.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000127 00000 n 
+0000000197 00000 n 
+0000003219 00000 n 
+0000003345 00000 n 
+0000005644 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+5770
+%%EOF

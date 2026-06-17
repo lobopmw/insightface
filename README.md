@@ -1,198 +1,499 @@
-# Monitoramento de Comportamentos em Sala
+# Sistema de Monitoramento Comportamental em Sala
 
-Sistema de monitoramento em tempo real com **YOLO Pose** + **InsightFace**, streaming **RTSP → Socket (relay)**, e interface em **Streamlit**.
+Sistema com `Streamlit + InsightFace + YOLO Pose + PostgreSQL/pgvector` para cadastro de alunos, reconhecimento facial, monitoramento comportamental em tempo real, geração de gráficos analíticos e relatórios observacionais.
 
-## 🧱 Requisitos
+## 1. Visão geral do que o sistema já faz
 
-- Python 3.9+  
-- GPU opcional (CUDA) para acelerar o InsightFace/YOLO
-- Câmera IP com RTSP (ex.: Hikvision/Intelbras)
-- VLC/ffplay (opcional, pra testar o RTSP)
+O sistema foi evoluído para cobrir o fluxo operacional completo de uso em ambiente escolar:
 
-### Dependências (pip)
+- autenticação de usuários com perfis `professor` e `admin`;
+- persistência de sessão com cookie e fallback por token assinado na URL;
+- cadastro de alunos com captura guiada por poses;
+- associação do aluno a uma turma;
+- geração automática ou reprocessamento de embeddings faciais;
+- armazenamento local dos vetores e sincronização no PostgreSQL com `pgvector`;
+- criação de sessões formais de monitoramento por professor, disciplina, turma e tipo de aula;
+- reconhecimento facial durante o monitoramento;
+- classificação comportamental com regras de estabilidade para reduzir falsos positivos;
+- persistência por episódio comportamental, em vez de salvar frame a frame;
+- gráficos por aluno com filtros por professor, disciplina, turma e período;
+- comparação dos comportamentos por tipo de aula;
+- relatórios observacionais com sínteses textuais, tabelas e exportações;
+- painel administrativo para usuários e manutenção de embeddings.
+
+## 2. Funcionalidades importantes
+
+### 2.1 Login, autenticação e sessão
+
+O acesso à aplicação é protegido por autenticação com CPF e senha.
+
+Principais pontos:
+
+- a tabela `users` é criada e validada automaticamente na inicialização;
+- a senha é armazenada com `bcrypt`;
+- a sessão do usuário é restaurada com cookie;
+- existe fallback opcional por token assinado em query string para lidar com falhas de restauração do Streamlit após refresh;
+- o sistema diferencia usuários `professor` e `admin`;
+- o logout limpa cookie, parâmetros legados, estado da sessão e contexto de monitoramento.
+
+Na prática, isso reduz perda de sessão e melhora a confiabilidade da navegação entre telas.
+
+### 2.2 Perfis de acesso
+
+O comportamento da interface muda conforme o perfil:
+
+- `professor`: acessa `Cadastro de Alunos`, `Monitoramento`, `Gráficos` e `Relatórios`;
+- `admin`: acessa `Usuários`, `Gráficos` e `Relatórios`.
+
+Além disso:
+
+- professores só veem turmas, disciplinas e alunos dentro do próprio escopo;
+- administradores podem visualizar o conjunto completo dos dados disponíveis no banco.
+
+### 2.3 Cadastro de alunos com captura guiada
+
+O cadastro de alunos não é apenas um formulário simples. Ele foi atualizado para operar com fluxo guiado de captura de imagens.
+
+O professor pode:
+
+- selecionar a turma;
+- indicar se o aluno é novo ou já existente;
+- aproveitar um aluno já cadastrado para atualizar poses e imagens;
+- usar matrícula gerada automaticamente quando o cadastro for novo;
+- avançar por um processo de captura assistida.
+
+Poses atualmente usadas no cadastro:
+
+- `frontal`
+- `lateral_direita`
+- `lateral_esquerda`
+- `cabeca_baixa`
+
+Durante esse processo o sistema:
+
+- valida nome e matrícula;
+- gera ou reutiliza o identificador lógico do aluno;
+- grava imagens em `data/alunos/<hash>/<pose>/...`;
+- atualiza `data/mapeamento_alunos.csv`;
+- pode associar o aluno à turma selecionada no banco.
+
+### 2.4 Geração de embeddings faciais
+
+Uma das atualizações mais importantes foi a consolidação do fluxo de embeddings.
+
+O sistema agora:
+
+- lê o mapeamento de alunos em `data/mapeamento_alunos.csv`;
+- percorre todas as imagens disponíveis por pose;
+- detecta rostos válidos nas fotos;
+- calcula um embedding médio por aluno;
+- salva o vetor localmente em `data/embeddings.npy`;
+- salva a ordem dos nomes em `data/names.pkl`;
+- faz `upsert` do embedding na tabela `face_embeddings`.
+
+Isso traz dois níveis de persistência:
+
+- fallback local para reconhecimento e manutenção;
+- persistência estruturada no PostgreSQL usando `vector(512)`.
+
+### 2.5 Geração automática de embedding após cadastro
+
+O fluxo de cadastro foi melhorado para tentar concluir o processamento facial logo após a captura.
+
+Ao finalizar um cadastro:
+
+- o sistema tenta gerar o embedding daquele aluno;
+- informa se a sincronização com o banco foi bem-sucedida;
+- permite reprocessar manualmente o embedding do aluno recém-cadastrado;
+- atualiza o estado interno do monitoramento para que o novo aluno possa ser reconhecido sem inconsistências.
+
+Isso reduz o risco de cadastrar o aluno e esquecer de preparar o reconhecimento facial.
+
+### 2.6 Painel de manutenção de embeddings
+
+O painel administrativo ganhou uma área específica para acompanhar a saúde dos embeddings.
+
+Esse painel mostra:
+
+- quantidade total de alunos mapeados;
+- quantos embeddings estão atualizados;
+- quantos estão pendentes;
+- quantidade de imagens disponíveis por aluno;
+- diagnóstico do motivo de pendência.
+
+Ações disponíveis:
+
+- `Reprocessar embeddings pendentes`
+- `Reprocessar todos os embeddings`
+
+Essa funcionalidade é importante porque facilita operação e suporte sem depender sempre de linha de comando.
+
+### 2.7 Administração de usuários
+
+O sistema já possui um módulo administrativo para gestão de acesso.
+
+O administrador pode:
+
+- listar usuários cadastrados;
+- criar novos usuários;
+- definir perfil `professor` ou `admin`;
+- registrar CPF, nome, cidade, estado e email;
+- redefinir senha de usuários existentes.
+
+No cadastro:
+
+- o CPF é validado;
+- a senha é confirmada antes do salvamento;
+- o perfil de professor gera vínculo de professor no banco quando necessário.
+
+### 2.8 Estrutura acadêmica no banco
+
+O banco foi ampliado para refletir melhor o contexto escolar real.
+
+Além de `users`, `students` e `face_embeddings`, o schema agora contempla:
+
+- `teachers`
+- `subjects`
+- `classes`
+- `teacher_subject_class`
+- `monitoring_sessions`
+- `behavior_episode`
+
+Isso permite que o sistema trabalhe com:
+
+- professor responsável;
+- disciplina da aula;
+- turma acompanhada;
+- tipo de aula;
+- sessão de monitoramento aberta e encerrada formalmente.
+
+### 2.9 Sessões de monitoramento
+
+O monitoramento em tempo real deixou de ser apenas uma tela de vídeo e passou a registrar sessões completas.
+
+Ao iniciar o monitoramento, o professor seleciona:
+
+- disciplina da aula;
+- turma acompanhada;
+- tipo de aula.
+
+Quando a sessão começa:
+
+- a tabela `monitoring_sessions` recebe uma nova linha;
+- a sessão fica com status `em_andamento`;
+- o sistema monta um lookup dos alunos do escopo permitido;
+- o gerenciador de episódios comportamentais é inicializado;
+- o runtime do monitoramento é preparado com a fonte de vídeo configurada.
+
+Ao encerrar:
+
+- a sessão recebe `end_time`;
+- o status muda para `encerrada`;
+- os episódios ficam vinculados à sessão monitorada.
+
+### 2.10 Reconhecimento facial e monitoramento em tempo real
+
+Durante o monitoramento, o sistema:
+
+- consome vídeo via relay/RTSP;
+- detecta pessoas e rostos;
+- tenta identificar o aluno com base nos embeddings;
+- aplica classificação comportamental;
+- exibe o resumo visual da sessão.
+
+O reconhecimento considera o escopo da turma do professor, o que ajuda a reduzir ambiguidades com alunos fora da sessão.
+
+### 2.11 Classificação comportamental com regras mais conservadoras
+
+O classificador comportamental foi refinado para evitar decisões otimistas demais.
+
+Comportamentos mapeados no sistema:
+
+- `Atento`
+- `Distraido`
+- `Perguntando`
+- `Dormindo`
+- `Agitado`
+- `Escrevendo`
+- `Em Pé`
+
+Pontos importantes do comportamento:
+
+- `Atento` não é mais fallback automático;
+- estados ambíguos tendem a permanecer mais conservadores;
+- cabeça baixa passa a bloquear promoção indevida para `Atento`;
+- `Perguntando` exige evidência mais consistente de mão levantada;
+- a troca de estado usa critérios de estabilidade em frames e tempo.
+
+Na prática, isso melhora a qualidade do dado salvo.
+
+### 2.12 Persistência por episódio comportamental
+
+Uma atualização central do sistema foi passar a persistir comportamento por episódio, e não por frame.
+
+Em vez de salvar milhares de eventos instantâneos, o sistema:
+
+- abre um episódio quando o comportamento estabiliza;
+- mantém o episódio enquanto o estado continua consistente;
+- encerra o episódio quando há mudança estável;
+- grava `start_time`, `end_time`, `duration_seconds`, `student`, `student_id`, `monitoring_session_id`, `lesson_type` e `source`.
+
+Benefícios:
+
+- dados mais limpos;
+- consultas mais rápidas;
+- gráficos mais interpretáveis;
+- relatórios mais fiéis ao tempo real observado.
+
+### 2.13 Gráficos comportamentais
+
+O sistema já possui uma área de gráficos com filtros e resumos analíticos.
+
+Filtros disponíveis conforme escopo do usuário:
+
+- professor;
+- disciplina;
+- turma;
+- aluno;
+- intervalo de datas.
+
+Os gráficos e análises incluem:
+
+- resumo textual automático do comportamento predominante;
+- tempo total por comportamento;
+- percentual do tempo por comportamento;
+- linha do tempo dos episódios;
+- comparação por tipo de aula;
+- exportação da base consolidada usada nos gráficos.
+
+Os dados usados nessa área vêm principalmente de `behavior_episode` associado a `monitoring_sessions`.
+
+### 2.14 Relatórios observacionais
+
+Além dos gráficos, o sistema já possui uma camada de relatórios mais interpretativos.
+
+A página de relatórios:
+
+- gera consolidação por aluno;
+- considera professor, disciplina, turma e período;
+- monta indicadores principais;
+- calcula distribuição diária, por faixa horária e por segmento da aula;
+- compara com período anterior equivalente;
+- mede consistência de cada comportamento;
+- identifica dias de pico;
+- produz sínteses textuais e notas metodológicas;
+- suporta exportações em CSV e PDF.
+
+É uma camada mais adequada para análise pedagógica do que apenas olhar gráficos brutos.
+
+### 2.15 Dados simulados para demonstração
+
+O projeto inclui suporte para geração de dados simulados.
+
+O script de seed:
+
+- lê os alunos cadastrados;
+- faz `upsert` em `students`;
+- reaproveita embeddings locais quando disponíveis;
+- cria episódios simulados em `behavior_episode`;
+- exporta CSV em `data/behavior_episodes_fake_YYYYMMDD.csv`.
+
+Isso ajuda em:
+
+- testes sem câmera ativa;
+- validação de gráficos;
+- demonstrações para apresentação;
+- homologação de relatórios.
+
+## 3. O que o sistema salva
+
+### 3.1 Arquivos locais em `data/`
+
+- `data/mapeamento_alunos.csv`: cadastro lógico com `nome`, `matricula` e `hash`;
+- `data/alunos/<hash>/...`: imagens do aluno organizadas por pose;
+- `data/embeddings.npy`: matriz local de embeddings;
+- `data/names.pkl`: nomes na ordem dos embeddings locais;
+- `data/behavior_episodes_fake_YYYYMMDD.csv`: exportações de episódios simulados.
+
+### 3.2 Tabelas relevantes no PostgreSQL
+
+- `users`: autenticação e perfil do usuário;
+- `teachers`: vínculo de usuário professor;
+- `subjects`: disciplinas;
+- `classes`: turmas;
+- `teacher_subject_class`: escopo professor-disciplina-turma;
+- `students`: alunos e associação com turma;
+- `face_embeddings`: vetores faciais persistidos;
+- `monitoring_sessions`: sessões formais de monitoramento;
+- `behavior_episode`: episódios comportamentais reais ou simulados;
+- `behavior_log`: estrutura legada, mantida para compatibilidade.
+
+## 4. Fluxo operacional resumido
+
+1. O usuário faz login.
+2. O professor acessa `Cadastro de Alunos`.
+3. Seleciona turma e cadastra ou atualiza um aluno.
+4. O sistema captura imagens por pose.
+5. O embedding do aluno é gerado e sincronizado.
+6. O professor abre uma sessão em `Monitoramento`.
+7. Seleciona disciplina, turma e tipo de aula.
+8. O sistema reconhece o aluno e classifica o comportamento.
+9. Os episódios são persistidos em `behavior_episode`.
+10. `Gráficos` e `Relatórios` consomem esses episódios para análise.
+
+## 5. Pré-requisitos
+
+- Docker + Docker Compose;
+- PostgreSQL;
+- extensão `pgvector`;
+- câmera local ou stream RTSP;
+- GPU CUDA opcional para acelerar processamento.
+
+## 6. Configuração inicial
+
+### 6.1 Variáveis de ambiente principais
+
+Campos importantes do `.env`:
+
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+- `RTSP_URL`
+- `RELAY_PORT`
+- `RELAY_SEND_FPS`
+- `RELAY_QUALITY`
+- `APP_TIMEZONE`
+- `AUTH_ENABLE_QUERY_TOKEN`
+- `AUTH_TOKEN_SECRET`
+
+Observações:
+
+- fora do Docker, normalmente o banco fica em `localhost`;
+- dentro do `docker compose`, o host do banco costuma ser `db`.
+
+### 6.2 Subir os serviços
+
 ```bash
-pip install -r requirements.txt
-```
-Se não tiver `requirements.txt`, instale:
-```bash
-pip install streamlit ultralytics opencv-python numpy torch torchvision torchaudio             scikit-learn pillow insightface onnxruntime-gpu onnxruntime             pandas plotly reportlab
-```
-> Use **onnxruntime-gpu** se tiver CUDA. Senão, deixe só **onnxruntime**.
-
-## 📁 Estrutura recomendada de pastas
-
-```
-project/
-│
-├─ src/
-│   ├─ insightface_classroom.py        # app Streamlit (principal)
-│   ├─ socket_video_stream.py          # cliente do relay (VideoStream)
-│   ├─ server_rtsp_socket.py           # servidor relay RTSP → socket (exemplo)
-│   ├─ register_face_multi_images_avg.py
-│   ├─ control_database.py             # DB e gráficos
-│   ├─ utils_criptografia.py           # salvar_mapeamento (hash)
-│   └─ images/
-│       ├─ classroom1.jpg
-│       ├─ faces.png
-│       ├─ cam_IA.png
-│       └─ table.png
-│
-└─ data/
-    ├─ mapeamento_alunos.csv           # CSV global (fora da pasta 'alunos')
-    ├─ alunos/
-    │   └─ <hash_do_aluno>/
-    │       ├─ frontal/
-    │       ├─ lateral_direita/
-    │       ├─ lateral_esquerda/
-    │       └─ cabeca_baixa/
-    ├─ embeddings.npy                  # gerado pelo script de registro
-    └─ names.json / names.pkl          # gerado pelo script de registro
+docker compose up --build -d db relay app
 ```
 
-> **Importante:** O app já usa `data/` como raiz, com:
-> - `data/mapeamento_alunos.csv`
-> - `data/alunos/<hash>/...`
-
-## 🚀 Passo a passo (primeira execução)
-
-### 1) Teste rápido do RTSP (opcional)
-Confirme que sua URL RTSP funciona:
-```bash
-vlc "rtsp://usuario:senha@IP_DA_CAMERA:554/Streaming/Channels/101"
-# ou:
-ffplay -rtsp_transport tcp "rtsp://usuario:senha@IP:554/Streaming/Channels/101"
-```
-
-### 2) Inicie o **servidor relay** (RTSP → socket)
-No terminal A:
-```bash
-cd src
-python server_rtsp_socket.py   --rtsp "rtsp://usuario:senha@IP_DA_CAMERA:554/Streaming/Channels/101"   --host 0.0.0.0   --port 5555   --send-fps 15   --resize 1280x720
-```
-- **--send-fps**: taxa de quadros enviada ao cliente  
-- **--resize**: opcional (diminui resolução pra reduzir latência/CPU)
-- **host/port**: mantenha coerente com o cliente (**127.0.0.1:5555** por padrão)
-
-> Dica: para **menos delay**, use o **substream** da câmera (ex.: *Channels/102*), GOP curto (I-frame mais frequente), bitrate CBR moderado, desative “smart codecs”.
-
-### 3) Abra o **app Streamlit**
-No terminal B:
-```bash
-cd src
-streamlit run insightface_classroom.py
-```
-Na interface:
-- Menu → **Cadastro de Alunos**
-- Depois → **Monitoramento**
-- **Gráficos** e **Tabela** para análise/relatórios
-
-## 👤 Cadastro de alunos (automático por pose)
-
-1. Abra **Cadastro de Alunos**
-2. Preencha **Disciplina**, **Nome** e **Matrícula**
-3. Ajuste:
-   - **Imagens por pose** (padrão 10)
-   - **Intervalo entre fotos (seg)** (padrão 0.8s)
-   - **Contagem inicial (seg)** (padrão 2s) → “respira, posiciona, valendo!”
-4. Clique **Iniciar captura desta pose**  
-   O app salva automaticamente as N imagens da pose na pasta:
-   ```
-   data/alunos/<hash_aluno>/<pose>/
-   ```
-5. Clique **Próximo** para a pose seguinte até concluir todas.  
-6. Ao final, clique **Finalizar cadastro**.
-
-> O arquivo **data/mapeamento_alunos.csv** guarda `nome`, `matricula`, `hash` do aluno.
-
-## 🧠 Gerar/atualizar embeddings (faces conhecidas)
-
-Sempre que cadastrar/alterar alunos, **rode**:
-```bash
-cd src
-python register_face_multi_images_avg.py
-```
-Esse script varre `data/alunos/`, calcula os embeddings médios por aluno e escreve:
-- `data/embeddings.npy`
-- `data/names.json` (ou `.pkl`, conforme seu script)
-
-O app carrega isso com `load_insightface_data()`.
-
-## 👁️ Monitoramento
-
-1. Certifique-se de que o **relay** (servidor socket) está **rodando**.
-2. No app, vá em **Monitoramento** e clique **Iniciar Monitoramento**.
-3. Opções:
-   - **Confiança Mínima** (pose)
-   - **Usar GPU (CUDA)** se disponível
-4. O app reconhece o aluno pelo rosto (se estiver no banco de embeddings) e classifica:
-   - **Atento**, **Perguntando**, **Escrevendo**, **Dormindo**, **Agitado**  
-   - **Distraído** é aplicado por tempo se a cabeça ficar de lado (regras simples)
-
-As mudanças de comportamento são enviadas para o banco via `insert_count_behavior(...)`.
-
-## 📊 Gráficos e 📋 Tabela
-
-- **Gráficos**: selecione **Aluno**, **Disciplina** e **Data**  
-  - Distribuição por comportamento  
-  - Contagem por comportamento  
-  - Evolução temporal  
-  - Botões para **download PNG** e **PDF** com os três gráficos
-- **Tabela**: filtragem por data, disciplina e comportamento
-
-## ⚙️ Notas de desempenho / baixa latência
-
-- Prefira **substream** (ex.: *Channels/102*) para reduzir bitrate/resolução.  
-- GOP curto (I-frame mais frequente), CBR moderado, **TCP** no RTSP.  
-- No **servidor relay**:
-  - Ajuste `--send-fps` e `--resize`.  
-  - Evite enviar mais FPS do que o necessário.
-- No **app**:
-  - Mantemos um **fps de render** fixo e um **worker** de IA que sempre processa o frame **mais recente** (evita fila).
-  - InsightFace: no GPU, `ctx_id=0`; no CPU, `ctx_id=-1` e `det_size=(640,640)` pra acelerar.
-- Evite múltiplas instâncias do app/relay usando a mesma porta.  
-- Se notar atraso após “rerun”, confira se o **relay** e a **webcam de cadastro** foram fechados (o app já faz isso ao mudar de página, mas vale checar).
-
-## 🛠️ Solução de problemas
-
-- **Sem vídeo no monitoramento**  
-  - Verifique o log do **servidor relay**  
-  - IP/porta corretos? (app usa `("127.0.0.1", 5555)`)  
-  - Firewall liberado?
-- **Muito delay**  
-  - Reduza `--resize` ou `--send-fps` no servidor  
-  - Use substream da câmera  
-  - Verifique que não há outra janela/consumidor do RTSP em paralelo
-- **Aluno como “Desconhecido”**  
-  - Rode novamente `register_face_multi_images_avg.py` após novos cadastros  
-  - Tire mais imagens **frontais** (bem iluminadas)  
-  - Verifique o **threshold** de similaridade (padrão ~0.45 na app)
-- **Contagens não aparecem nos gráficos/tabela**  
-  - Os gráficos filtram por **Aluno**, **Disciplina** e **Data** — confira se coincidem  
-  - Confirme se `insert_count_behavior(...)` está sendo chamado (muda de estado)  
-  - Cheque a base/arquivo SQLite configurado em `control_database.py`
-
-## 🔒 Observações de privacidade
-
-- O app guarda um **hash** do aluno (nome + matrícula) para nomear as pastas.  
-- As fotos ficam em `data/alunos/<hash>/...`.  
-- Proteja a pasta `data/` e o acesso à máquina/servidor.
-
-## 🧪 Comandos úteis (resumo)
+### 6.3 Verificar logs
 
 ```bash
-# 1) Relay (servidor)
-python src/server_rtsp_socket.py --rtsp "rtsp://user:pass@CAM_IP:554/Streaming/Channels/101"   --host 0.0.0.0 --port 5555 --send-fps 15 --resize 1280x720
-
-# 2) App
-streamlit run src/insightface_classroom.py
-
-# 3) Atualizar embeddings após cadastro
-python src/register_face_multi_images_avg.py
+docker compose logs -f db
+docker compose logs -f relay
+docker compose logs -f app
 ```
 
-## ✍️ Dicas finais
+### 6.4 Acesso local e remoto
 
-- Para evitar “rerun” com streams abertos, sempre **pare o monitoramento** antes de mexer em opções/voltar pro cadastro.
-- Se trocar **host/porta** do relay, atualize no `VideoStream(("HOST", PORTA))`.
-- Se precisar mudar caminhos, ajuste no início do app:
-  - `DATA_DIR`, `DATABASE_PATH`, `MAPPING_CSV`.
+O container da aplicação publica a porta `8501` no host e o Streamlit sobe com `--server.address=0.0.0.0`.
+
+Isso significa:
+
+- na própria máquina que executa o Docker, o acesso pode ser feito por `https://localhost:8501`;
+- em outra máquina da rede, o acesso deve ser feito por `https://<IP-ou-host-da-maquina-que-executa-o-docker>:8501`;
+- não use `localhost` a partir de uma máquina remota, porque nesse caso `localhost` aponta para a própria máquina cliente, e não para o servidor onde o sistema está rodando.
+
+Exemplos:
+
+- acesso local no servidor: `https://localhost:8501`
+- acesso remoto na mesma rede: `https://192.168.1.50:8501`
+- acesso por IP público: `https://SEU_IP_PUBLICO:8501`
+
+Observações importantes:
+
+- a porta `8501` precisa estar liberada no firewall da máquina host;
+- se houver roteador, NAT ou cloud security group, a porta `8501/TCP` também precisa estar liberada ou redirecionada;
+- como o Streamlit pode apresentar certificado não confiado nesse cenário, o navegador pode exibir aviso de segurança ao abrir a URL HTTPS.
+
+## 7. Comandos úteis
+
+### 7.1 Reprocessar embeddings via CLI
+
+```bash
+docker compose run --rm app python src/register_face_multi_images_avg.py
+```
+
+### 7.2 Gerar dados simulados
+
+```bash
+docker compose run --rm app python src/seed_existing_students_and_fake_behavior.py --date 2026-02-13 --seed 42 --total-minutes 50
+```
+
+### 7.3 Entrar no banco
+
+```bash
+docker compose exec -T db psql -U insightface_user -d insightface_db
+```
+
+## 8. Validação rápida no banco
+
+```sql
+SELECT COUNT(*) FROM users;
+SELECT COUNT(*) FROM students;
+SELECT COUNT(*) FROM face_embeddings;
+SELECT COUNT(*) FROM monitoring_sessions;
+SELECT COUNT(*) FROM behavior_episode;
+
+SELECT source, COUNT(*)
+FROM behavior_episode
+GROUP BY source;
+```
+
+## 9. Troubleshooting
+
+### 9.1 Aluno aparece como desconhecido
+
+- confirme se o cadastro do aluno foi concluído com embedding gerado;
+- use o painel de manutenção de embeddings para verificar pendências;
+- reprocesse o embedding do aluno ou todos os pendentes;
+- confira se existem imagens válidas nas pastas de pose;
+- valide se a tabela `face_embeddings` foi populada.
+
+### 9.2 Gráficos ou relatórios sem dados
+
+- verifique os filtros de aluno, disciplina, turma e data;
+- confirme se existe sessão em `monitoring_sessions`;
+- confirme se existem episódios em `behavior_episode`;
+- verifique se o usuário logado tem escopo para enxergar aqueles dados.
+
+### 9.3 Professor não consegue cadastrar ou monitorar
+
+- confirme se o usuário está com perfil `professor`;
+- verifique se existe registro correspondente em `teachers`;
+- confirme se há vínculos em `teacher_subject_class`;
+- sem vínculo de turma e disciplina, o sistema restringe as opções da interface.
+
+### 9.4 Delay no vídeo
+
+- reduza `RELAY_SEND_FPS`;
+- use stream RTSP secundário com menor resolução;
+- confira carga de CPU/GPU;
+- evite múltiplos consumidores simultâneos do mesmo stream.
+
+### 9.5 Sessão cai após atualizar o navegador
+
+- revise a configuração de cookie do ambiente;
+- se necessário, habilite fallback por token com `AUTH_ENABLE_QUERY_TOKEN`;
+- defina um `AUTH_TOKEN_SECRET` seguro fora do valor padrão.
+
+### 9.6 Não consigo abrir pela máquina remota
+
+- confirme se o container `app` está em execução com `docker compose ps`;
+- valide se a porta `8501` está publicada no host;
+- acesse usando `https://<IP_DO_SERVIDOR>:8501`, e não `https://localhost:8501`;
+- se o navegador exibir alerta de certificado, teste aceitando o aviso para validar conectividade;
+- confirme se o firewall local, roteador ou provedor cloud libera `8501/TCP`;
+- se o acesso for externo pela internet, confirme se o IP público ou DNS aponta para a máquina correta.
+
+## 10. Boas práticas operacionais
+
+- após novos cadastros, valide o status dos embeddings antes de iniciar monitoramento;
+- mantenha turmas, disciplinas e vínculos professor-turma atualizados no banco;
+- use tipo de aula corretamente para melhorar as análises comparativas;
+- para apresentação, gere dados simulados antes do evento;
+- acompanhe logs de `app`, `relay` e `db` em caso de falha;
+- não misture banco local e banco Docker sem revisar `DB_HOST`.
