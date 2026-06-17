@@ -1,0 +1,117 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: insightface_migration_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-insightface_db}
+      POSTGRES_USER: ${DB_USER:-insightface_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-insightface_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - migration_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-insightface_user} -d ${DB_NAME:-insightface_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - insightface_migration
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    container_name: insightface_migration_backend
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      PROJECT_NAME: ${PROJECT_NAME:-InsightFace Classroom API}
+      API_PREFIX: ${API_PREFIX:-/api}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080,http://127.0.0.1:8080}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-insightface_db}
+      DB_USER: ${DB_USER:-insightface_user}
+      DB_PASSWORD: ${DB_PASSWORD:-insightface_password}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-before-production}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      RTSP_URL: ${RTSP_URL:-}
+      RELAY_HOST: ${RELAY_HOST:-127.0.0.1}
+      RELAY_PORT: ${RELAY_PORT:-5555}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../data:/app/data:ro
+    command:
+      [
+        "sh",
+        "-c",
+        "python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - insightface_migration
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+        VITE_WS_BASE_URL: ${VITE_WS_BASE_URL:-/api}
+    container_name: insightface_migration_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - insightface_migration
+
+  admin-init:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    profiles:
+      - tools
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-insightface_db}
+      DB_USER: ${DB_USER:-insightface_user}
+      DB_PASSWORD: ${DB_PASSWORD:-insightface_password}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-before-production}
+      PYTHONPATH: /app
+      ADMIN_CPF: ${ADMIN_CPF:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_NAME: ${ADMIN_NAME:-Administrador}
+    command: ["python", "scripts/create_admin_user.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - insightface_migration
+
+volumes:
+  migration_pgdata:
+
+networks:
+  insightface_migration:
+    driver: bridge

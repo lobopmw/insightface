@@ -5,7 +5,7 @@ import time
 
 POSES = ["frontal", "lateral_direita", "lateral_esquerda", "cabeca_baixa"]
 IMAGENS_POR_POSE = 10
-INTERVALO = 1  # segundos entre capturas
+INTERVALO = 1  # segundos entre capturas''
 
 st.set_page_config(page_title="Captura com Vídeo ao Vivo", layout="centered")
 
